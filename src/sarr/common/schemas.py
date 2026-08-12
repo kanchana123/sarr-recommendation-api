@@ -18,13 +18,21 @@ class PackageRecord(BaseModel):
     forks: int = 0
     downloads_30d: int | None = None
     last_commit: datetime | date | None = None
-    latest_release: datetime | date | None = None
+    latest_release: datetime | date | str | None = None
     license: str | None = None
     requires_python: str | None = None
     repo_url: str | None = None
+    homepage_url: str | None = None
     pypi_url: str | None = None
-    update_date: datetime | date | None = None
+    update_date: datetime | date | str | None = None
     content_hash: str | None = None
+    # Libraries.io ranking signals
+    sourcerank: int = 0
+    dependent_projects_count: int = 0
+    versions_count: int = 0
+    dependent_repositories_count: int = 0
+    language: str | None = None
+    platform: str | None = "Pypi"
 
     @field_validator("name")
     @classmethod

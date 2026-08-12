@@ -14,9 +14,12 @@ class Settings(BaseSettings):
     )
 
     # BigQuery / ETL
+    # gcp_project_id = YOUR project (billing/quota for the query job).
+    # Default source = Libraries.io public dataset (PyPI + repo stars).
     gcp_project_id: str = ""
-    bq_dataset: str = ""
-    bq_table: str = ""
+    bq_source_project: str = "bigquery-public-data"
+    bq_dataset: str = "libraries_io"
+    bq_table: str = "projects"
     last_update_date: str = Field(
         default="1970-01-01",
         description="Watermark for incremental ETL. Use epoch date for full load.",

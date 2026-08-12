@@ -33,8 +33,15 @@ def to_payload(package: PackageRecord) -> dict[str, Any]:
         "license": package.license,
         "requires_python": package.requires_python,
         "repo_url": package.repo_url,
+        "homepage_url": package.homepage_url,
         "pypi_url": package.pypi_url,
         "update_date": _isoformat(package.update_date),
+        "sourcerank": package.sourcerank,
+        "dependent_projects_count": package.dependent_projects_count,
+        "versions_count": package.versions_count,
+        "dependent_repositories_count": package.dependent_repositories_count,
+        "language": package.language,
+        "platform": package.platform,
         "content_hash": package.content_hash or content_hash(package),
     }
 
