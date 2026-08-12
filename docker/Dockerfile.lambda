@@ -1,0 +1,21 @@
+# syntax=docker/dockerfile:1
+
+# AWS Lambda container image for API Gateway → Mangum → FastAPI.
+# Build: docker build -f docker/Dockerfile.lambda -t sarr-search-api .
+# Handler: sarr.api.handler.handler
+
+FROM public.ecr.aws/lambda/python:3.12
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HF_HOME=/tmp/huggingface
+
+COPY pyproject.toml README.md ./
+COPY src ./src
+
+RUN pip install --upgrade pip \
+    && pip install ".[api]" --target "${LAMBDA_TASK_ROOT}"
+
+COPY src/sarr ${LAMBDA_TASK_ROOT}/sarr
+
+CMD ["sarr.api.handler.handler"]

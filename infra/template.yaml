@@ -1,0 +1,51 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: SARR search API — Lambda container behind HTTP API
+
+Parameters:
+  ImageUri:
+    Type: String
+    Description: ECR image URI for docker/Dockerfile.lambda
+  QdrantUrl:
+    Type: String
+  QdrantApiKey:
+    Type: String
+    NoEcho: true
+  QdrantCollection:
+    Type: String
+    Default: sarr_pypi
+
+Resources:
+  SearchFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      MemorySize: 3008
+      Timeout: 30
+      Architectures: [x86_64]
+      Environment:
+        Variables:
+          QDRANT_URL: !Ref QdrantUrl
+          QDRANT_API_KEY: !Ref QdrantApiKey
+          QDRANT_COLLECTION: !Ref QdrantCollection
+          RERANK_ENABLED_DEFAULT: "false"
+      Events:
+        SearchApi:
+          Type: HttpApi
+          Properties:
+            Path: /{proxy+}
+            Method: ANY
+        SearchRoot:
+          Type: HttpApi
+          Properties:
+            Path: /
+            Method: ANY
+    Metadata:
+      DockerTag: sarr-search
+      DockerContext: ../
+      Dockerfile: docker/Dockerfile.lambda
+
+Outputs:
+  ApiUrl:
+    Description: API Gateway endpoint URL
+    Value: !Sub "https://${ServerlessHttpApi}.execute-api.${AWS::Region}.amazonaws.com/"

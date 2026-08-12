@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SARR — PyPI Semantic Search</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="header">
+        <p class="brand">SARR</p>
+        <h1>Semantic PyPI search</h1>
+        <p class="tagline">Retrieve and rank packages by meaning, not just keywords.</p>
+      </header>
+
+      <form id="search-form" class="search-form">
+        <label class="sr-only" for="query">Search query</label>
+        <input
+          id="query"
+          name="query"
+          type="search"
+          placeholder="e.g. async HTTP client with retries"
+          required
+        />
+        <div class="controls">
+          <label>
+            <input id="rerank" type="checkbox" />
+            Rerank
+          </label>
+          <button type="submit">Search</button>
+        </div>
+      </form>
+
+      <p id="status" class="status" aria-live="polite"></p>
+      <section id="results" class="results"></section>
+    </main>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
