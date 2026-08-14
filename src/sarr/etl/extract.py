@@ -37,6 +37,7 @@ WHERE p.platform = 'Pypi'
   AND p.description IS NOT NULL
   AND TRIM(p.description) != ''
   AND LENGTH(p.description) > 5
+  AND p.latest_release_publish_timestamp IS NOT NULL
   AND p.latest_release_publish_timestamp > TIMESTAMP(@last_update_date)
 ORDER BY p.latest_release_publish_timestamp ASC
 """
@@ -141,7 +142,44 @@ def extract_packages(
         ]
     )
 
+    print(f"[extract] watermark={watermark}")
+    print(f"[extract] SQL source={cfg.bq_source_project}.{cfg.bq_dataset}.projects")
     result = bq_client.query(sql, job_config=job_config)
+    yielded = 0
     for row in result:
         payload = dict(row.items()) if hasattr(row, "items") else dict(row)
+        yielded += 1
+        if yielded == 1:
+            print(f"[extract] first row name={payload.get('name')!r}")
         yield row_to_package(payload)
+    print(f"[extract] total rows yielded={yielded}")
+
+
+def count_extract_rows(
+    last_update_date: str | None = None,
+    settings: Settings | None = None,
+    client: Any | None = None,
+) -> int:
+    """Count rows the ETL would process (cheap diagnostic)."""
+    from google.cloud.bigquery import QueryJobConfig, ScalarQueryParameter
+
+    cfg = settings or get_settings()
+    watermark = parse_watermark(last_update_date or cfg.last_update_date)
+    sql = f"""
+    SELECT COUNT(*) AS n
+    FROM `{cfg.bq_source_project}.{cfg.bq_dataset}.projects` AS p
+    WHERE p.platform = 'Pypi'
+      AND p.description IS NOT NULL
+      AND TRIM(p.description) != ''
+      AND LENGTH(p.description) > 5
+      AND p.latest_release_publish_timestamp IS NOT NULL
+      AND p.latest_release_publish_timestamp > TIMESTAMP(@last_update_date)
+    """
+    bq_client = client or get_bigquery_client(cfg)
+    job_config = QueryJobConfig(
+        query_parameters=[
+            ScalarQueryParameter("last_update_date", "STRING", watermark),
+        ]
+    )
+    rows = list(bq_client.query(sql, job_config=job_config))
+    return int(rows[0]["n"]) if rows else 0

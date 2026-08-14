@@ -68,3 +68,40 @@ def test_run_etl_with_injected_fakes(sample_package: PackageRecord, tmp_path) ->
     assert len(loader.batches) == 1
     assert loader.batches[0][0] == ["requests"]
     assert watermark_path.read_text(encoding="utf-8").startswith("2024-05-01")
+
+
+@pytest.mark.unit
+def test_run_etl_checkpoints_watermark_each_batch(tmp_path) -> None:
+    loader = FakeLoader()
+    watermark_path = tmp_path / "wm.txt"
+    packages = [
+        PackageRecord(name="a", summary="a", update_date="2024-01-01", stars=1),
+        PackageRecord(name="b", summary="b", update_date="2024-01-02", stars=2),
+        PackageRecord(name="c", summary="c", update_date="2024-01-03", stars=3),
+    ]
+
+    stats = run_etl(
+        last_update_date="1970-01-01",
+        batch_size=2,
+        watermark_path=str(watermark_path),
+        packages=packages,
+        embedder=FakeEmbedder(),  # type: ignore[arg-type]
+        loader=loader,  # type: ignore[arg-type]
+    )
+
+    assert stats["processed"] == 3
+    assert len(loader.batches) == 2
+    assert watermark_path.read_text(encoding="utf-8").startswith("2024-01-03")
+
+
+@pytest.mark.unit
+def test_run_etl_skips_validation_for_injected_packages(tmp_path) -> None:
+    stats = run_etl(
+        last_update_date="1970-01-01",
+        batch_size=10,
+        watermark_path=str(tmp_path / "wm.txt"),
+        packages=[PackageRecord(name="x", summary="hello world")],
+        embedder=FakeEmbedder(),  # type: ignore[arg-type]
+        loader=FakeLoader(),  # type: ignore[arg-type]
+    )
+    assert stats["processed"] == 1
