@@ -12,6 +12,8 @@ form.addEventListener("submit", async (event) => {
   statusEl.textContent = "Searching…";
   resultsEl.innerHTML = "";
 
+  const clientStarted = performance.now();
+
   try {
     const response = await fetch(`${API_BASE}/v1/search`, {
       method: "POST",
@@ -19,12 +21,21 @@ form.addEventListener("submit", async (event) => {
       body: JSON.stringify({ query, limit: 10, rerank }),
     });
 
+    const clientMs = performance.now() - clientStarted;
+
     if (!response.ok) {
       throw new Error(`API ${response.status}: ${await response.text()}`);
     }
 
     const data = await response.json();
-    statusEl.textContent = `${data.total} result(s)${data.reranked ? " (reranked)" : ""}`;
+    const elapsedMs =
+      typeof data.took_ms === "number" ? data.took_ms : clientMs;
+    const resultLabel = data.total === 1 ? "result" : "results";
+    const rerankNote = data.reranked ? " with reranking" : "";
+
+    statusEl.textContent =
+      `Found ${data.total} ${resultLabel}${rerankNote}. ` +
+      `Request completed in ${formatDuration(elapsedMs)}.`;
 
     for (const hit of data.results) {
       const article = document.createElement("article");
@@ -40,9 +51,19 @@ form.addEventListener("submit", async (event) => {
       resultsEl.appendChild(article);
     }
   } catch (error) {
-    statusEl.textContent = error instanceof Error ? error.message : "Search failed";
+    const clientMs = performance.now() - clientStarted;
+    const detail = error instanceof Error ? error.message : "Search failed";
+    statusEl.textContent =
+      `${detail}. Request failed after ${formatDuration(clientMs)}.`;
   }
 });
+
+function formatDuration(ms) {
+  if (ms < 1000) {
+    return `${Math.round(ms)} ms`;
+  }
+  return `${(ms / 1000).toFixed(2)} s`;
+}
 
 function escapeHtml(value) {
   return String(value)

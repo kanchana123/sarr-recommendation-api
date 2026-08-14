@@ -30,21 +30,22 @@ class VectorStore:
         limit: int,
         query_filter: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
+        # qdrant-client >= 1.16 removed Client.search in favor of query_points
         from qdrant_client.http import models as qmodels
 
         qdrant_filter = None
         if query_filter:
             qdrant_filter = qmodels.Filter.model_validate(query_filter)
 
-        hits = self.client.search(
+        response = self.client.query_points(
             collection_name=self.settings.qdrant_collection,
-            query_vector=vector,
+            query=vector,
             limit=limit,
             query_filter=qdrant_filter,
             with_payload=True,
         )
         results: list[dict[str, Any]] = []
-        for hit in hits:
+        for hit in response.points:
             results.append(
                 {
                     "id": hit.id,

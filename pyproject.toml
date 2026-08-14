@@ -45,6 +45,7 @@ dev = [
 all = ["sarr[api,etl,dev]"]
 
 [project.scripts]
+sarr = "sarr.cli:main"
 sarr-api = "sarr.api.local:main"
 
 [tool.setuptools.packages.find]

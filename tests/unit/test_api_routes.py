@@ -24,6 +24,7 @@ class StubSearchService:
                     stars=52000,
                 )
             ],
+            timing_ms={"embed_ms": 1.0, "qdrant_ms": 2.0, "rerank_ms": 0.0, "blend_ms": 0.1},
         )
 
 
@@ -48,3 +49,5 @@ def test_search_endpoint(client: TestClient) -> None:
     body = response.json()
     assert body["query"] == "http library"
     assert body["results"][0]["name"] == "requests"
+    assert "took_ms" in body
+    assert isinstance(body["took_ms"], (int, float))

@@ -56,11 +56,15 @@ def test_search_without_rerank_returns_hits() -> None:
         embedder=FakeEmbedder(),  # type: ignore[arg-type]
         vector_store=FakeStore(),  # type: ignore[arg-type]
         reranker=FakeReranker(),  # type: ignore[arg-type]
+        warm=False,
     )
     response = service.search(SearchRequest(query="http client", limit=2, rerank=False))
     assert response.total == 2
     assert response.reranked is False
     assert response.results[0].name in {"requests", "httpx"}
+    assert response.timing_ms is not None
+    assert "embed_ms" in response.timing_ms
+    assert "qdrant_ms" in response.timing_ms
 
 
 @pytest.mark.unit
@@ -70,6 +74,7 @@ def test_search_with_rerank_reorders() -> None:
         embedder=FakeEmbedder(),  # type: ignore[arg-type]
         vector_store=FakeStore(),  # type: ignore[arg-type]
         reranker=FakeReranker(),  # type: ignore[arg-type]
+        warm=False,
     )
     response = service.search(SearchRequest(query="http client", limit=2, rerank=True))
     assert response.reranked is True

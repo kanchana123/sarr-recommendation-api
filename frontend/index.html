@@ -3,38 +3,50 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SARR — PyPI Semantic Search</title>
+    <title>SARR — Semantic PyPI Search</title>
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
-    <main class="page">
-      <header class="header">
-        <p class="brand">SARR</p>
-        <h1>Semantic PyPI search</h1>
-        <p class="tagline">Retrieve and rank packages by meaning, not just keywords.</p>
+    <div class="shell">
+      <header class="topbar">
+        <a class="brand-link" href="./index.html">SARR</a>
+        <nav class="nav" aria-label="Primary">
+          <a href="./index.html" aria-current="page">Search</a>
+          <a href="./about.html">How it works</a>
+          <a href="./contact.html">Contact</a>
+        </nav>
       </header>
 
-      <form id="search-form" class="search-form">
-        <label class="sr-only" for="query">Search query</label>
-        <input
-          id="query"
-          name="query"
-          type="search"
-          placeholder="e.g. async HTTP client with retries"
-          required
-        />
-        <div class="controls">
-          <label>
-            <input id="rerank" type="checkbox" />
-            Rerank
-          </label>
-          <button type="submit">Search</button>
-        </div>
-      </form>
+      <main class="page">
+        <header class="header">
+          <h1>Semantic PyPI search</h1>
+          <p class="tagline">
+            Find packages by meaning — not just exact keywords.
+          </p>
+        </header>
 
-      <p id="status" class="status" aria-live="polite"></p>
-      <section id="results" class="results"></section>
-    </main>
+        <form id="search-form" class="search-form">
+          <label class="sr-only" for="query">Search query</label>
+          <input
+            id="query"
+            name="query"
+            type="search"
+            placeholder="e.g. async HTTP client with retries"
+            required
+          />
+          <div class="controls">
+            <label>
+              <input id="rerank" type="checkbox" />
+              Rerank
+            </label>
+            <button type="submit">Search</button>
+          </div>
+        </form>
+
+        <p id="status" class="status" aria-live="polite"></p>
+        <section id="results" class="results"></section>
+      </main>
+    </div>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

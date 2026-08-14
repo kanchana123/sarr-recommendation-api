@@ -1,14 +1,16 @@
-.PHONY: help install install-dev test lint format docker-up docker-down docker-build-api docker-build-lambda
+.PHONY: help install install-dev test lint format run-api docker-build docker-up docker-down docker-logs docker-build-api docker-build-lambda
 
 help:
 	@echo "SARR common targets:"
-	@echo "  make install           Install base + API deps"
-	@echo "  make install-dev       Install all optional deps including tests"
-	@echo "  make test              Run unit tests"
-	@echo "  make lint              Ruff check"
-	@echo "  make docker-up         Start local API + Qdrant"
-	@echo "  make docker-down       Stop compose stack"
-	@echo "  make docker-build-api  Build local API image"
+	@echo "  make install              Install API deps"
+	@echo "  make install-dev          Install all optional deps including tests"
+	@echo "  make run-api              Run search API locally on :8080"
+	@echo "  make test                 Run unit tests"
+	@echo "  make lint                 Ruff check"
+	@echo "  make docker-build         Build sarr-api:latest image"
+	@echo "  make docker-up            Start API container (uses .env → Qdrant Cloud)"
+	@echo "  make docker-down          Stop compose stack"
+	@echo "  make docker-logs          Tail API container logs"
 	@echo "  make docker-build-lambda  Build Lambda container image"
 
 install:
@@ -16,6 +18,9 @@ install:
 
 install-dev:
 	pip install -e ".[all]"
+
+run-api:
+	uvicorn sarr.api.app:app --host 0.0.0.0 --port 8080
 
 test:
 	pytest tests/unit -m unit
@@ -29,14 +34,19 @@ lint:
 format:
 	ruff format src tests
 
+docker-build:
+	docker build -f docker/Dockerfile.api -t sarr-api:latest .
+
 docker-up:
 	docker compose up --build -d
 
 docker-down:
 	docker compose down
 
-docker-build-api:
-	docker build -f docker/Dockerfile.api -t sarr-api:local .
+docker-logs:
+	docker compose logs -f api
+
+docker-build-api: docker-build
 
 docker-build-lambda:
 	docker build -f docker/Dockerfile.lambda -t sarr-search-api:lambda .

@@ -1,14 +1,15 @@
 # syntax=docker/dockerfile:1
+#
+# Search API image (FastAPI + embedding/rerank models).
+# Build:  docker build -f docker/Dockerfile.api -t sarr-api:latest .
+# Run:    see README "Docker" section / docker compose
 
-# Local / containerized search API (same code path as Lambda handler).
-# For AWS Lambda, prefer docker/Dockerfile.lambda which uses the AWS base image.
-
-FROM python:3.12-slim AS base
+FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    HF_HOME=/tmp/huggingface
+    HF_HOME=/cache/huggingface
 
 WORKDIR /app
 
@@ -24,7 +25,7 @@ RUN pip install --upgrade pip \
 
 EXPOSE 8080
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz')"
 
 CMD ["uvicorn", "sarr.api.app:app", "--host", "0.0.0.0", "--port", "8080"]

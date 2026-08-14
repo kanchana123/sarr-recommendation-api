@@ -1,23 +1,24 @@
+# Clone → copy .env → docker compose up --build
+#
+# Default: API talks to Qdrant Cloud (set QDRANT_* in .env).
+# Optional local empty Qdrant:
+#   QDRANT_URL=http://qdrant:6333 docker compose --profile local-qdrant up --build
+
 services:
   api:
     build:
       context: .
       dockerfile: docker/Dockerfile.api
+    image: sarr-api:latest
     container_name: sarr-api
     ports:
       - "8080:8080"
     env_file:
-      - .env.example
+      - .env
     environment:
-      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
-      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
-      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-sarr_pypi}
-      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
-      RERANKER_MODEL: ${RERANKER_MODEL:-cross-encoder/ms-marco-MiniLM-L-6-v2}
-      RERANK_ENABLED_DEFAULT: ${RERANK_ENABLED_DEFAULT:-false}
-    depends_on:
-      qdrant:
-        condition: service_started
+      HF_HOME: /cache/huggingface
+    volumes:
+      - hf_cache:/cache/huggingface
     healthcheck:
       test:
         [
@@ -29,9 +30,11 @@ services:
       interval: 30s
       timeout: 5s
       retries: 5
-      start_period: 90s
+      start_period: 120s
+    restart: unless-stopped
 
   qdrant:
+    profiles: ["local-qdrant"]
     image: qdrant/qdrant:v1.11.3
     container_name: sarr-qdrant
     ports:
@@ -39,6 +42,8 @@ services:
       - "6334:6334"
     volumes:
       - qdrant_data:/qdrant/storage
+    restart: unless-stopped
 
 volumes:
+  hf_cache:
   qdrant_data:

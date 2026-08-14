@@ -74,3 +74,11 @@ class SearchResponse(BaseModel):
     total: int
     reranked: bool
     results: list[SearchHit]
+    took_ms: float | None = Field(
+        default=None,
+        description="Server-side search latency in milliseconds.",
+    )
+    timing_ms: dict[str, float] | None = Field(
+        default=None,
+        description="Per-stage server timings in milliseconds.",
+    )
