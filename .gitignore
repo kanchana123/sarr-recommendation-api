@@ -59,3 +59,5 @@ docker-data/
 **/.terraform/
 *.tfstate*
 infra/.aws-sam/
+
+devio.md
