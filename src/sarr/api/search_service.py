@@ -31,12 +31,10 @@ class SearchService:
         self.vector_store = vector_store or VectorStore(self.settings)
         self.reranker = reranker or Reranker(self.settings.reranker_model)
         if warm and embedder is None:
-            # Load model at startup so the first user request isn't penalized.
             started = time.perf_counter()
             self.embedder.embed("warmup")
             logger.info(
-                "embedder warmed device=%s took_ms=%.1f",
-                getattr(self.embedder.model, "device", "unknown"),
+                "embedder warmed took_ms=%.1f",
                 (time.perf_counter() - started) * 1000.0,
             )
 
@@ -66,14 +64,21 @@ class SearchService:
         if rerank and candidates:
             t2 = time.perf_counter()
             documents = [self._candidate_text(hit["payload"]) for hit in candidates]
-            relevance_scores = self.reranker.rerank(request.query, documents)
-            timing_ms["rerank_ms"] = round((time.perf_counter() - t2) * 1000.0, 1)
-            # Min-max normalize reranker scores into 0..1 for blending
-            lo, hi = min(relevance_scores), max(relevance_scores)
-            if hi > lo:
-                relevance_scores = [(s - lo) / (hi - lo) for s in relevance_scores]
+            try:
+                relevance_scores = self.reranker.rerank(request.query, documents)
+            except ImportError:
+                logger.warning("rerank requested but torch is unavailable; using vector scores")
+                rerank = False
+                relevance_scores = [hit["score"] for hit in candidates]
+                timing_ms["rerank_ms"] = 0.0
             else:
-                relevance_scores = [1.0 for _ in relevance_scores]
+                timing_ms["rerank_ms"] = round((time.perf_counter() - t2) * 1000.0, 1)
+                # Min-max normalize reranker scores into 0..1 for blending
+                lo, hi = min(relevance_scores), max(relevance_scores)
+                if hi > lo:
+                    relevance_scores = [(s - lo) / (hi - lo) for s in relevance_scores]
+                else:
+                    relevance_scores = [1.0 for _ in relevance_scores]
         else:
             timing_ms["rerank_ms"] = 0.0
 

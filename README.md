@@ -5,11 +5,15 @@ not just keyword overlap. The MVP indexes **~168k PyPI packages** and answers
 natural-language queries such as *“async HTTP client with retries”* or
 *“machine learning”* — including packages whose names do not contain those words.
 
-Offline indexing runs on GPU (Google Colab); online search serves query
-embeddings, vector retrieval, optional cross-encoder reranking, and a
-lightweight score blend over popularity and recency. Vectors live in
-**Qdrant Cloud**; the API is **FastAPI** (local today, AWS Lambda-ready); the
-demo UI is a static Vite app aimed at **GitHub Pages**.
+Offline indexing runs on GPU (Google Colab) with **PyTorch**. Online search
+embeds the query, retrieves neighbors, optionally reranks, and blends
+popularity and recency. Vectors live in **Qdrant Cloud**. The API is
+**FastAPI** on **AWS Lambda**, where both the bi-encoder and the
+cross-encoder run as **ONNX** (no PyTorch import on the request path). The
+demo UI is a static Vite app on **GitHub Pages**.
+
+**Live demo:** [kanchana123.github.io/sarr-recommendation-api](https://kanchana123.github.io/sarr-recommendation-api/)
+**API:** `https://isz2aki1n2.execute-api.us-east-1.amazonaws.com` (`/v1/search`, `/healthz`)
 
 ---
 
@@ -26,20 +30,20 @@ close.
 
 ## Architecture
 
-```text
-BigQuery (Libraries.io PyPI)
-        │
-        ▼
-  Colab GPU ETL  ──embed──►  Qdrant Cloud
-                              ▲
-Client / Demo UI ──► FastAPI ─┘
-                     embed query → ANN → optional rerank → blend → JSON
-```
+Offline indexing (GPU, infrequent) is separate from online search (CPU, per request). Both paths share the same bi-encoder checkpoint (`BAAI/bge-small-en-v1.5`) and search-document format. ETL uses PyTorch; Lambda serves the same weights as ONNX.
+
+Replace `docs/diagrams/*.png` (this README) and `frontend/public/diagrams/*.png` (How it works page) to update the figures.
+
+<img src="docs/diagrams/architecture.png" alt="SARR architecture: GitHub Pages and CLI call API Gateway and Lambda; Colab ETL upserts into Qdrant Cloud" width="800" />
+
+Request path inside the API (`took_ms` is server-side time):
+
+<img src="docs/diagrams/search-sequence.png" alt="Search sequence: query embed, Qdrant ANN, optional ONNX rerank, score blend" width="800" />
 
 | Path | Role |
 |---|---|
-| **ETL** | Watermarked BigQuery extract → document build → bi-encoder batch embed → idempotent Qdrant upsert |
-| **Online** | Query embed → top‑k vector search → optional cross-encoder → α·relevance + β·popularity + δ·recency |
+| **ETL** | Watermarked BigQuery extract → document build → PyTorch bi-encoder batch embed → idempotent Qdrant upsert |
+| **Online** | ONNX query embed → top‑k vector search → optional ONNX cross-encoder → α·relevance + β·popularity + δ·recency |
 | **Shared** | Same embedding model and search-document format for index and query (no train/serve skew) |
 
 Designed so indexing (heavy, infrequent, GPU) stays separate from serving
@@ -50,9 +54,9 @@ Designed so indexing (heavy, infrequent, GPU) stays separate from serving
 
 ## Retrieval & ranking
 
-- **Bi-encoder:** `BAAI/bge-small-en-v1.5` (384‑d) for corpus and query vectors  
+- **Bi-encoder:** `BAAI/bge-small-en-v1.5` (384‑d). Colab ETL embeds the corpus with PyTorch; Lambda embeds queries with a baked ONNX graph.  
 - **ANN:** cosine similarity over the full collection in Qdrant  
-- **Rerank (optional):** `cross-encoder/ms-marco-MiniLM-L-6-v2` on a short top‑k list  
+- **Rerank (optional):** `cross-encoder/ms-marco-MiniLM-L-6-v2` on a short top‑k list. Hosted Lambda runs this as ONNX as well (`rerank: true` in `POST /v1/search`).  
 - **Blend:** semantic score mixed with stars / dependents / SourceRank and release recency  
 
 Numeric popularity is kept in the **payload**, not stuffed into the embedding
@@ -62,15 +66,47 @@ text, so similarity stays about *what the package does*.
 
 ## Performance (MVP measurements)
 
-| Stage | Observed |
-|---|---|
-| Full index load | **167,619** packages embedded + upserted to Qdrant (Colab T4) |
-| Cold first query | multi‑second (model load on CPU) |
-| Warm search, no rerank | typically **~0.5–1.7 s** locally → Qdrant Cloud |
-| Warm search + rerank | often **~0.5–0.7 s** once both models are loaded (rerank adds work; cold starts dominate first calls) |
+Latency below is **server `took_ms`** (embed + Qdrant + optional rerank + blend). That is the number to quote for serving performance. **Client RTT** includes the network to `us-east-1` and is what a browser feels; do not mix it into p99 unless you say where the client ran. Cold start is quoted separately — do not fold it into p50/p95/p99.
 
-Latency is reported per request (`took_ms`, plus embed / Qdrant / rerank stages)
-so regressions are visible during local testing.
+| Condition | Server `took_ms` | Notes |
+|---|---|---|
+| Full index load | — | **167,619** packages embedded + upserted (Colab T4, PyTorch) |
+| Corpus freshness | — | Libraries.io slice; newest `latest_release` in this dump is **Dec 2018** |
+| Cold, `rerank=false` | **~5 s** | First request after idle; loads ONNX bi-encoder |
+| Cold, `rerank=true` | **~16 s** | Also loads ONNX MiniLM cross-encoder |
+| Warm, `rerank=false` | **p50 18 ms · p95 26 ms · p99 30 ms** | 50 sequential mixed queries |
+| Warm, `rerank=true` | **p50 176 ms · p95 266 ms · p99 270 ms** | ~160 ms extra for the cross-encoder; a typical UI call is ~200–230 ms |
+| Warm stages | embed **~7 ms**, Qdrant **~9–11 ms** (p50) | Same with or without rerank |
+
+Warm percentiles: `scripts/measure_latency.py`, 15 Aug 2026, 1 warmup + 50 requests, all succeeded. Client RTT from this laptop was p50 **~122 ms** (no rerank) and **~276 ms** (rerank). API Gateway HTTP APIs still cap the client wait at **30 s**, which is why Lambda uses ONNX instead of importing PyTorch.
+
+Each response also includes `took_ms` and `timing_ms` (`embed_ms`, `qdrant_ms`, `rerank_ms`).
+
+### How to measure latency
+
+Warmup **once**, then run sequential searches. Do not mix the first cold load into p50/p95.
+
+```bash
+# Hosted API
+python3 scripts/measure_latency.py \
+  --url https://isz2aki1n2.execute-api.us-east-1.amazonaws.com \
+  --n 50
+
+# Local API (start it first)
+export SARR_API_URL=http://localhost:8080
+make latency
+```
+
+The script prints per-request client RTT and the server’s `took_ms` / `embed_ms` / `qdrant_ms`, then p50 / p95 / p99. One-off:
+
+```bash
+curl -sS -w "\nHTTP:%{http_code} TIME:%{time_total}\n" \
+  "$SARR_API_URL/v1/search" \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"async HTTP client","limit":10,"rerank":false}' | python3 -m json.tool
+```
+
+Look at `took_ms` and `timing_ms` in the JSON for server-side time; curl’s `TIME` is the full round trip.
 
 ETL is **checkpointed by watermark** after each successful batch: a Colab
 disconnect resumes without duplicating points (Qdrant upserts by stable package
@@ -83,7 +119,7 @@ id).
 | Layer | Choice |
 |---|---|
 | Data | BigQuery public Libraries.io (`projects` ⨝ `repositories`), PyPI filter |
-| ML | sentence-transformers, PyTorch |
+| ML | sentence-transformers / PyTorch (ETL); ONNX Runtime (Lambda embed + rerank) |
 | Store | Qdrant Cloud |
 | API | FastAPI, Pydantic v2, Mangum (Lambda) |
 | Packaging | `src/` layout, `pyproject.toml`, optional extras (`api` / `etl` / `dev`) |
@@ -214,6 +250,10 @@ sam deploy --guided
 You will set `QdrantUrl`, `QdrantApiKey`, and `QdrantCollection` during deploy.
 The stack output `ApiUrl` is your public search endpoint (`/v1/search`, `/healthz`).
 
+The GitHub Pages demo is built by `.github/workflows/pages.yml`. Set repository
+variable `VITE_API_BASE_URL` to that `ApiUrl` (no trailing slash), enable Pages
+with **Source: GitHub Actions**, then run the **Deploy frontend** workflow.
+
 ### ETL (Colab)
 
 Open `notebooks/etl_colab.ipynb`, use a GPU runtime, set billing `GCP_PROJECT_ID`
@@ -243,10 +283,9 @@ OpenAPI docs: `http://localhost:8080/docs`
 
 ## Roadmap
 
-- Deploy search API on AWS Lambda + API Gateway  
-- Incremental refresh from official PyPI BigQuery metadata (fresher releases) while preserving Libraries.io popularity fields  
-- Hybrid sparse + dense retrieval for exact name matches  
-- Larger eval set (nDCG) for ranking weight tuning  
+- Incremental refresh from official PyPI BigQuery metadata (fresher releases) while preserving Libraries.io popularity fields
+- Hybrid sparse + dense retrieval for exact name matches
+- Larger eval set (nDCG) for ranking weight tuning
 
 ---
 

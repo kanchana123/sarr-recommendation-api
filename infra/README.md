@@ -66,15 +66,15 @@ VITE_API_BASE_URL=https://xxxx.execute-api.us-east-1.amazonaws.com
 ## What gets created
 
 - **ECR** image from `docker/Dockerfile.lambda` (FastAPI + Mangum + models deps)
-- **Lambda** function (container, ~3 GB RAM, 60s timeout)
+- **Lambda** function (container, ~3 GB RAM, 90s timeout)
 - **HTTP API** (API Gateway) → `ANY /` and `ANY /{proxy+}`
 
 Handler: `sarr.api.handler.handler` (Mangum → FastAPI).
 
 ## Expectation / limits
 
-- **Cold start is slow** (loads embedding weights into memory). First request after idle can take many seconds; warm requests are much faster.
-- Image is **large** (PyTorch + sentence-transformers). Stay under Lambda’s container image size limit; build on `linux/amd64` if you’re on Apple Silicon:
+- **Cold start** loads ONNX sessions: about **5 s** without rerank, about **16 s** with rerank. Warm search is **p99 ~30 ms** (`rerank=false`) and **p99 ~270 ms** (`rerank=true`) server `took_ms`.
+- Runtime image is **ONNX Runtime** (no PyTorch). The build stage uses CPU PyTorch only to export graphs. Stay under Lambda’s container image size limit; build on `linux/amd64` if you’re on Apple Silicon:
 
 ```bash
 docker build --platform linux/amd64 -f docker/Dockerfile.lambda -t sarr-search-api .

@@ -1,4 +1,4 @@
-.PHONY: help install install-dev test lint format run-api docker-build docker-up docker-down docker-logs docker-build-api docker-build-lambda
+.PHONY: help install install-dev test lint format run-api latency docker-build docker-up docker-down docker-logs docker-build-api docker-build-lambda
 
 help:
 	@echo "SARR common targets:"
@@ -11,7 +11,7 @@ help:
 	@echo "  make docker-up            Start API container (uses .env → Qdrant Cloud)"
 	@echo "  make docker-down          Stop compose stack"
 	@echo "  make docker-logs          Tail API container logs"
-	@echo "  make docker-build-lambda  Build Lambda container image"
+	@echo "  make latency             Warmup + 50 sequential searches (uses SARR_API_URL)"
 
 install:
 	pip install -e ".[api]"
@@ -27,6 +27,9 @@ test:
 
 test-all:
 	pytest
+
+latency:
+	python3 scripts/measure_latency.py --url "$${SARR_API_URL:-http://localhost:8080}"
 
 lint:
 	ruff check src tests

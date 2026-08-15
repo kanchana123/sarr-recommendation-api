@@ -3,11 +3,12 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8080";
 const form = document.getElementById("search-form");
 const statusEl = document.getElementById("status");
 const resultsEl = document.getElementById("results");
+const rerankInput = document.getElementById("rerank");
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const query = document.getElementById("query").value.trim();
-  const rerank = document.getElementById("rerank").checked;
+  const rerank = rerankInput.checked;
 
   statusEl.textContent = "Searching…";
   resultsEl.innerHTML = "";
@@ -31,11 +32,18 @@ form.addEventListener("submit", async (event) => {
     const elapsedMs =
       typeof data.took_ms === "number" ? data.took_ms : clientMs;
     const resultLabel = data.total === 1 ? "result" : "results";
-    const rerankNote = data.reranked ? " with reranking" : "";
+    const rankingNote = data.reranked
+      ? "with cross-encoder rerank"
+      : "semantic ranking";
+    const skippedRerank =
+      rerank && !data.reranked
+        ? " Rerank was requested but the API did not apply it."
+        : "";
 
     statusEl.textContent =
-      `Found ${data.total} ${resultLabel}${rerankNote}. ` +
-      `Request completed in ${formatDuration(elapsedMs)}.`;
+      `Found ${data.total} ${resultLabel} (${rankingNote}).` +
+      skippedRerank +
+      ` Request completed in ${formatDuration(elapsedMs)}.`;
 
     for (const hit of data.results) {
       const article = document.createElement("article");

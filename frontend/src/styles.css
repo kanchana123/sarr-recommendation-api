@@ -108,6 +108,12 @@ body {
   gap: 1rem;
 }
 
+.rerank-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
 button {
   border: 0;
   background: var(--accent);
@@ -180,9 +186,24 @@ button {
   line-height: 1.55;
 }
 
-.prose ul,
-.prose ol {
-  padding-left: 1.2rem;
+.prose figure {
+  margin: 1rem 0 1.25rem;
+}
+
+.prose .diagram {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+}
+
+.prose figcaption {
+  margin: 0.45rem 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.45;
 }
 
 .steps {

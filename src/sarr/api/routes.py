@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 
 from fastapi import APIRouter, HTTPException
@@ -19,7 +20,9 @@ _service: SearchService | None = None
 def get_search_service() -> SearchService:
     global _service
     if _service is None:
-        _service = SearchService()
+        # Skip extra warmup encode on Lambda; first search already loads the model.
+        warm = "AWS_LAMBDA_FUNCTION_NAME" not in os.environ
+        _service = SearchService(warm=warm)
     return _service
 
 

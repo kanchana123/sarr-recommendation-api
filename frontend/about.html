@@ -38,10 +38,57 @@
           <p>
             <strong>SARR</strong> (Semantic Artifacts Retrieval and Ranking)
             indexes PyPI packages as semantic documents and returns a ranked
-            list for natural-language queries. The live demo covers on the order
-            of <strong>168k</strong> packages drawn from public Libraries.io
-            metadata joined with repository signals.
+            list for natural-language queries. The live demo covers
+            <strong>167,619</strong> packages from public Libraries.io
+            metadata joined with repository signals. That dump is an MVP
+            corpus — the newest release timestamp in this slice is from
+            <strong>December 2018</strong> — so ranking features are strong,
+            while freshness is a known next step.
           </p>
+        </section>
+
+        <section>
+          <h2>System design</h2>
+          <p>
+            Indexing is a rare GPU job (Colab, <strong>PyTorch</strong>). Serving
+            only embeds the query, retrieves neighbors from Qdrant, optionally
+            reranks, and blends in adoption and recency. On Lambda both the
+            bi-encoder and the cross-encoder run as <strong>ONNX</strong> — no
+            PyTorch import on the request path. Both paths share the same
+            <code>BAAI/bge-small-en-v1.5</code> checkpoint and document format.
+          </p>
+          <p class="tagline">
+            Diagrams live in <code>frontend/public/diagrams/</code>. Replace
+            <code>architecture.png</code> and <code>search-sequence.png</code>
+            to update this page and the README.
+          </p>
+          <figure>
+            <img
+              class="diagram"
+              src="./diagrams/architecture.png"
+              alt="Architecture: GitHub Pages and CLI call API Gateway and Lambda; Colab ETL upserts into Qdrant Cloud"
+            />
+            <figcaption>
+              Online serving (left) vs offline data prep (right). Colab embeds
+              the corpus with PyTorch and upserts into Qdrant Cloud (~167k
+              points). The demo UI and CLI hit API Gateway → Lambda for each
+              search.
+            </figcaption>
+          </figure>
+          <figure>
+            <img
+              class="diagram"
+              src="./diagrams/search-sequence.png"
+              alt="Sequence diagram of ONNX query embed, Qdrant ANN, optional ONNX rerank, score blend, and JSON with took_ms"
+            />
+            <figcaption>
+              Per request: ONNX query embed (384-d), ANN cosine top-k in Qdrant,
+              optional ONNX cross-encoder when <code>rerank=true</code>, then
+              <code>0.75·relevance + 0.15·popularity + 0.10·recency</code>.
+              The JSON response includes <code>took_ms</code> (server-side
+              latency).
+            </figcaption>
+          </figure>
         </section>
 
         <section>
@@ -50,14 +97,16 @@
             <li>
               <strong>Index offline.</strong> A GPU batch job pulls PyPI rows
               from BigQuery, builds a structured text document per package,
-              embeds it with a bi-encoder, and upserts vectors plus metadata
-              into Qdrant. Runs are watermarked so a disconnect can resume
-              without duplicating points.
+              embeds it with a PyTorch bi-encoder, and upserts vectors plus
+              metadata into Qdrant. Runs are watermarked so a disconnect can
+              resume without duplicating points.
             </li>
             <li>
-              <strong>Encode the query online.</strong> The same embedding model
-              used at index time maps your search string into the same vector
-              space — keeping train/serve representation aligned.
+              <strong>Encode the query online.</strong> The same embedding
+              checkpoint used at index time maps your search string into the
+              same 384-d space. Hosted Lambda runs a baked ONNX graph; local
+              dev can still use sentence-transformers when no ONNX files are
+              present.
             </li>
             <li>
               <strong>Retrieve neighbors.</strong> Approximate nearest-neighbor
@@ -65,10 +114,10 @@
               full collection.
             </li>
             <li>
-              <strong>Refine when needed.</strong> An optional cross-encoder
-              rescores a short top‑k list with a deeper query–document model.
-              It is toggled per request so you can trade a bit of latency for
-              precision on harder queries.
+              <strong>Refine when needed.</strong> If you check <em>Rerank</em>,
+              the UI sends <code>rerank: true</code> and an ONNX MiniLM
+              cross-encoder rescores the short top‑k list. No PyTorch import
+              on Lambda.
             </li>
             <li>
               <strong>Blend for usefulness.</strong> The final score mixes
@@ -101,9 +150,13 @@
             </div>
           </div>
           <p>
-            Try <em>“machine learning”</em> or <em>“async HTTP client with
-            retries”</em> on the search page: relevant libraries appear even
-            when those phrases are absent from the package name.
+            Try <em>“text to speech”</em> or <em>“async HTTP client with
+            retries”</em> on the search page. PyPI.org often ranks packages
+            whose <em>names</em> contain the query words (including mismatched
+            descriptions). SARR can surface a widely used library such as
+            <code>google-cloud-texttospeech</code> even when the name is not a
+            literal copy of the query — and can also over-retrieve near-misses
+            such as speech-to-text vs text-to-speech.
           </p>
         </section>
 
@@ -112,46 +165,66 @@
           <p>
             The MVP uses a compact bi-encoder
             (<code>BAAI/bge-small-en-v1.5</code>, 384 dimensions) so indexing
-            ~168k documents on a Colab T4 stays practical, and query embedding
-            on CPU remains acceptable for a demo API. Reranking uses a small
-            cross-encoder on the retrieved shortlist rather than scoring the
-            whole corpus — the usual two-stage IR pattern: cheap recall, then
-            selective precision.
+            ~168k documents on a Colab T4 stays practical. ETL embeds the
+            corpus with PyTorch / sentence-transformers. The Lambda image
+            exports those weights to ONNX at build time so query embedding on
+            CPU stays well under API Gateway’s 30s client wait. Reranking uses
+            <code>cross-encoder/ms-marco-MiniLM-L-6-v2</code> as ONNX on the
+            retrieved shortlist rather than scoring the whole corpus — cheap
+            recall, then selective precision.
           </p>
           <p>
             Serving keeps the heavy lift out of the request path: corpus
-            embeddings are precomputed; each request only embeds the query,
-            hits the vector store, and optionally reranks. The API is structured
-            for the same code path locally and in a containerized Lambda image,
-            with shared schemas and document formatting between ETL and search.
+            embeddings are precomputed. Each hosted request only runs small
+            ONNX graphs for the query (and the cross-encoder when rerank is
+            on), hits Qdrant, and blends scores. The same FastAPI app runs
+            locally (sentence-transformers when no ONNX graph is present) and
+            on Lambda (ONNX Runtime, no PyTorch), with shared schemas and
+            document formatting between ETL and search.
           </p>
         </section>
 
         <section>
           <h2>What “fast enough” looks like today</h2>
+          <p>
+            Quote server <code>took_ms</code> for serving quality. Quote client
+            RTT plus location for what a browser feels. Cold start is separate
+            — do not fold it into p50 / p95 / p99.
+          </p>
           <ul>
             <li>
-              Full corpus load completed for <strong>167,619</strong> packages
-              (embed + Qdrant upsert).
+              Full corpus load: <strong>167,619</strong> packages (PyTorch
+              embed + Qdrant upsert on a Colab T4).
             </li>
             <li>
-              After models are warm, searches commonly land around
-              <strong>half a second to a couple of seconds</strong> depending on
-              network to Qdrant Cloud and whether rerank is on — with per-stage
-              timings exposed so you can see embed vs retrieval cost.
+              Cold Lambda: about <strong>5 s</strong> without rerank, about
+              <strong>16 s</strong> with rerank (loads ONNX sessions).
             </li>
             <li>
-              The first request after a process start is slower: weights load
-              once, then stay resident for subsequent queries.
+              Warm, <code>rerank=false</code>: server p50 <strong>18 ms</strong>,
+              p99 <strong>30 ms</strong>. Warm, <code>rerank=true</code>: p50
+              <strong>176 ms</strong>, p99 <strong>270 ms</strong> (~160 ms extra
+              for the cross-encoder; a typical UI call is ~200–230 ms).
+            </li>
+            <li>
+              Warm stages: query embed ~7 ms, Qdrant ~9–11 ms (p50). Client RTT
+              from this measurement was p50 ~122 ms (no rerank) and ~276 ms
+              (rerank), including the path to <code>us-east-1</code>.
             </li>
           </ul>
+          <p>
+            To reproduce: <code>python3 scripts/measure_latency.py --url $SARR_API_URL --n 50</code>
+            (15 Aug 2026: 1 warmup + 50 sequential mixed queries). Compare
+            <code>took_ms</code> (server) with curl’s total time (client).
+          </p>
         </section>
 
         <section>
           <h2>Stack at a glance</h2>
           <ul>
             <li>BigQuery → sentence-transformers / PyTorch → Qdrant Cloud</li>
-            <li>FastAPI + Pydantic for the search contract</li>
+            <li>FastAPI + Pydantic for the search contract; Mangum on Lambda</li>
+            <li>ONNX Runtime for hosted query embeddings and rerank (no PyTorch import)</li>
             <li>Vite demo (Search, How it works, Contact)</li>
             <li>Automated unit tests and lint in CI</li>
           </ul>

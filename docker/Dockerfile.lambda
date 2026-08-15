@@ -3,19 +3,54 @@
 # AWS Lambda container image for API Gateway → Mangum → FastAPI.
 # Build: docker build -f docker/Dockerfile.lambda -t sarr-search-api .
 # Handler: sarr.api.handler.handler
+#
+# PyTorch cannot be imported on Lambda within API Gateway's 30s limit (~34s
+# for torch alone). Export the bi-encoder to ONNX in a builder stage and keep
+# torch out of the runtime image. Export both the bi-encoder and the
+# cross-encoder so hosted search can rerank without importing PyTorch.
+#
+# Pin linux/amd64 so SAM's x86_64 Lambda build works on Apple Silicon.
 
-FROM public.ecr.aws/lambda/python:3.12
+FROM --platform=linux/amd64 public.ecr.aws/lambda/python:3.12 AS exporter
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     HF_HOME=/tmp/huggingface
 
+RUN pip install --upgrade pip \
+    && pip install --index-url https://download.pytorch.org/whl/cpu torch \
+    && python -c "import torch; open('/tmp/constraints.txt','w').write('torch==%s\n' % torch.__version__)" \
+    && pip install --constraint /tmp/constraints.txt \
+        --extra-index-url https://download.pytorch.org/whl/cpu \
+        "sentence-transformers>=3.0" onnxruntime onnx
+
+COPY docker/export_onnx_models.py /tmp/export_onnx_models.py
+RUN python /tmp/export_onnx_models.py /opt/models \
+    && rm -rf /tmp/huggingface /root/.cache
+
+FROM --platform=linux/amd64 public.ecr.aws/lambda/python:3.12
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HF_HOME=/tmp/huggingface \
+    PYTHONPATH=${LAMBDA_TASK_ROOT}
+
 COPY pyproject.toml README.md ./
-COPY src ./src
 
 RUN pip install --upgrade pip \
-    && pip install ".[api]" --target "${LAMBDA_TASK_ROOT}"
+    && pip install --target "${LAMBDA_TASK_ROOT}" \
+        "pydantic>=2.6" \
+        "pydantic-settings>=2.2" \
+        "httpx>=0.27" \
+        "numpy>=1.26" \
+        "qdrant-client>=1.9" \
+        "onnxruntime>=1.17" \
+        "tokenizers>=0.19" \
+        "mangum>=0.17" \
+        "fastapi>=0.111" \
+        "uvicorn[standard]>=0.30"
 
+COPY --from=exporter /opt/models ${LAMBDA_TASK_ROOT}/models
 COPY src/sarr ${LAMBDA_TASK_ROOT}/sarr
 
 CMD ["sarr.api.handler.handler"]
