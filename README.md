@@ -32,8 +32,6 @@ close.
 
 Offline indexing (GPU, infrequent) is separate from online search (CPU, per request). Both paths share the same bi-encoder checkpoint (`BAAI/bge-small-en-v1.5`) and search-document format. ETL uses PyTorch; Lambda serves the same weights as ONNX.
 
-Replace `docs/diagrams/*.png` (this README) and `frontend/public/diagrams/*.png` (How it works page) to update the figures.
-
 <img src="docs/diagrams/architecture.png" alt="SARR architecture: GitHub Pages and CLI call API Gateway and Lambda; Colab ETL upserts into Qdrant Cloud" width="800" />
 
 Request path inside the API (`took_ms` is server-side time):
