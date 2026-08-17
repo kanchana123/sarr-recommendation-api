@@ -25,6 +25,7 @@ api = [
   "mangum>=0.17",
   "fastapi>=0.111",
   "uvicorn[standard]>=0.30",
+  "google-genai>=1.0",
 ]
 etl = [
   "qdrant-client>=1.9",

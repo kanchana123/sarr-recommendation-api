@@ -7,14 +7,17 @@ import os
 import time
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 
+from sarr.api.rag_service import RagService
 from sarr.api.search_service import SearchService
-from sarr.common.schemas import SearchRequest, SearchResponse
+from sarr.common.schemas import RagRequest, SearchRequest, SearchResponse
 
 logger = logging.getLogger("sarr.api")
 
 router = APIRouter()
 _service: SearchService | None = None
+_rag_service: RagService | None = None
 
 
 def get_search_service() -> SearchService:
@@ -24,6 +27,13 @@ def get_search_service() -> SearchService:
         warm = "AWS_LAMBDA_FUNCTION_NAME" not in os.environ
         _service = SearchService(warm=warm)
     return _service
+
+
+def get_rag_service() -> RagService:
+    global _rag_service
+    if _rag_service is None:
+        _rag_service = RagService(get_search_service())
+    return _rag_service
 
 
 @router.get("/healthz")
@@ -64,3 +74,27 @@ def search(request: SearchRequest) -> SearchResponse:
         timing.get("blend_ms"),
     )
     return response
+
+
+@router.post("/v1/rag")
+def rag(request: RagRequest) -> StreamingResponse:
+    """SSE: ranked_list first, then llm_delta tokens, then llm_done or llm_error."""
+    service = get_rag_service()
+    try:
+        ranked = service.retrieve(request)
+    except Exception as exc:  # noqa: BLE001 — surfaced as HTTP 502 for MVP
+        logger.exception("rag retrieve failed query=%r error=%s", request.query, exc)
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    def events() -> object:
+        yield from service.stream_generation(request.query, ranked)
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )

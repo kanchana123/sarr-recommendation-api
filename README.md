@@ -275,8 +275,11 @@ make test
 |---|---|---|
 | `GET` | `/healthz` | Liveness |
 | `POST` | `/v1/search` | `{ "query", "limit", "rerank" }` → ranked hits + `took_ms` |
+| `POST` | `/v1/rag` | `{ "query" }` → SSE `ranked_list`, then `llm_delta` / `llm_done` (Vertex Gemini, citation-checked top-3) |
 
 OpenAPI docs: `http://localhost:8080/docs`
+
+`POST /v1/rag` streams Server-Sent Events. The ranked list is emitted first; generation uses Vertex AI Gemini (`GCP_PROJECT_ID`, ADC). API Gateway HTTP APIs do not stream well — run this path locally or on Cloud Run. The eval harness (precision@k, citation accuracy, faithfulness, cost) is a follow-on deliverable.
 
 ---
 

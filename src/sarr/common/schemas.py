@@ -82,3 +82,28 @@ class SearchResponse(BaseModel):
         default=None,
         description="Per-stage server timings in milliseconds.",
     )
+
+
+class RagRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=512)
+    filters: SearchFilters | None = None
+
+
+class LlmRecommendation(BaseModel):
+    package: str
+    reason: str = Field(min_length=1, max_length=800)
+    cited_snippet: str = Field(min_length=1, max_length=400)
+
+
+class LlmRecommendationList(BaseModel):
+    recommendations: list[LlmRecommendation] = Field(min_length=1, max_length=3)
+
+
+class GroundedRecommendation(LlmRecommendation):
+    snippet_in_description: bool = False
+
+
+class RagLlmResult(BaseModel):
+    recommendations: list[GroundedRecommendation]
+    dropped: list[str] = Field(default_factory=list)
+    parse_error: str | None = None

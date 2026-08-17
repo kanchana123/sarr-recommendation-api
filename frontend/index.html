@@ -20,8 +20,9 @@
       <main class="page">
         <header class="header">
           <h1>Semantic PyPI search</h1>
-          <p class="tagline">
-            Find packages by meaning — not just exact keywords.
+        <p class="tagline">
+            Find packages by meaning, then a grounded top-3 with citations
+            from the retrieved descriptions.
           </p>
         </header>
 
@@ -36,7 +37,7 @@
           />
           <div class="controls">
             <label class="rerank-control">
-              <input id="rerank" name="rerank" type="checkbox" />
+              <input id="rerank" name="rerank" type="checkbox" checked />
               Rerank
             </label>
             <button type="submit">Search</button>
@@ -44,6 +45,7 @@
         </form>
 
         <p id="status" class="status" aria-live="polite"></p>
+        <section id="recommendations" class="recommendations" aria-live="polite"></section>
         <section id="results" class="results"></section>
       </main>
     </div>

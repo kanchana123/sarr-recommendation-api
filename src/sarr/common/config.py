@@ -40,6 +40,15 @@ class Settings(BaseSettings):
     search_top_k: int = 50
     rerank_top_k: int = 20
 
+    # RAG: retrieve 50, rerank all of them, keep 8 for the LLM, emit 3
+    rag_retrieve_k: int = 50
+    rag_rerank_k: int = 50
+    rag_context_k: int = 8
+    rag_llm_timeout_s: float = 20.0
+    vertex_location: str = "us-central1"
+    vertex_gemini_model: str = "gemini-3.5-flash-lite"
+    vertex_gemini_fallback_model: str = "gemini-3.6-flash"
+
     # Ranking blend weights
     rank_alpha: float = 0.75
     rank_beta: float = 0.15
