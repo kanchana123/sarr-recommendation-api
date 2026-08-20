@@ -261,21 +261,30 @@
             </li>
             <li>
               Warm, <code>rerank=false</code>: server p50 <strong>18 ms</strong>,
-              p99 <strong>30 ms</strong>. Warm, <code>rerank=true</code>: p50
-              <strong>176 ms</strong>, p99 <strong>270 ms</strong> (~160 ms extra
-              for the cross-encoder; a typical UI call is ~200–230 ms).
+              p95 <strong>65 ms</strong>, p99 <strong>67 ms</strong>. Warm,
+              <code>rerank=true</code>: p50 <strong>172 ms</strong>, p95
+              <strong>257 ms</strong> (~154 ms extra for the cross-encoder;
+              client p50 ~271 ms from this region).
             </li>
             <li>
               Local RAG (warm, LLM + rerank on): ranked list
-              <strong>472 ms</strong> (fast path), Gemini top-3
-              <strong>1.05 s</strong> (<code>llm_ms</code>) for
-              <em>async HTTP client</em>.
+              <strong>472 ms</strong>, Gemini top-3 <strong>1.05 s</strong>
+              (<code>llm_ms</code>) for <em>async HTTP client</em>.
+            </li>
+            <li>
+              Hosted RAG (warm, LLM + rerank on Lambda): ranked list
+              <strong>~350–520 ms</strong> server <code>took_ms</code>, Gemini
+              <strong>~650 ms–1.2 s</strong> (<code>llm_ms</code>). API Gateway
+              may deliver SSE in one block rather than streaming incrementally.
             </li>
           </ul>
           <p>
-            To reproduce: <code>python3 scripts/measure_latency.py --url $SARR_API_URL --n 50</code>
-            (15 Aug 2026: 1 warmup + 50 sequential mixed queries). Compare
-            <code>took_ms</code> (server) with curl’s total time (client).
+            To reproduce search latency:
+            <code>python3 scripts/measure_latency.py --url $SARR_API_URL --n 50</code>
+            (20 Aug 2026: 1 warmup + 50 sequential mixed queries on the live
+            API). For rerank, warm up once then add
+            <code>--rerank --skip-warmup</code>. Compare <code>took_ms</code>
+            (server) with curl’s total time (client).
           </p>
         </section>
 
@@ -285,6 +294,15 @@
             <li>BigQuery → sentence-transformers / PyTorch → Qdrant Cloud</li>
             <li>FastAPI + Pydantic for the search contract; Mangum on Lambda</li>
             <li>ONNX Runtime for hosted query embeddings and rerank (no PyTorch import)</li>
+            <li>
+              <code>POST /v1/rag</code> + SSE: retrieve 50 → top 8 → citation-checked
+              Gemini top-3 (demo <em>LLM</em> checkbox)
+            </li>
+            <li>
+              Vertex Gemini (<code>gemini-2.5-flash-lite</code>, fallback
+              <code>gemini-2.5-flash</code>) on GCP; service account in AWS
+              Secrets Manager on Lambda
+            </li>
             <li>Vite demo (Search, How it works, Contact)</li>
             <li>Automated unit tests and lint in CI</li>
           </ul>

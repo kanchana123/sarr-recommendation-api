@@ -26,6 +26,10 @@ Parameters:
     Type: String
     Default: /var/task/models/ms-marco-MiniLM-L-6-v2
     Description: Local path (baked into the image) or Hugging Face id for the cross-encoder
+  GcpProjectId:
+    Type: String
+    Default: sarr-505305
+    Description: GCP project for Vertex AI Gemini (RAG).
 
 Resources:
   SearchFunction:
@@ -44,6 +48,11 @@ Resources:
           RERANKER_MODEL: !Ref RerankerModel
           EMBEDDING_DIM: "384"
           RERANK_ENABLED_DEFAULT: "false"
+          GCP_PROJECT_ID: !Ref GcpProjectId
+          GCP_CREDENTIALS_SECRET_ARN: !Sub "${AWS::StackName}/gcp-vertex"
+          VERTEX_LOCATION: us-central1
+          VERTEX_GEMINI_MODEL: gemini-2.5-flash-lite
+          VERTEX_GEMINI_FALLBACK_MODEL: gemini-2.5-flash
           HF_HOME: /tmp/huggingface
           TOKENIZERS_PARALLELISM: "false"
           OMP_NUM_THREADS: "1"
@@ -52,6 +61,13 @@ Resources:
           TORCH_NUM_THREADS: "1"
           CUDA_VISIBLE_DEVICES: ""
           NVIDIA_VISIBLE_DEVICES: "void"
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+              Resource: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${AWS::StackName}/gcp-vertex*"
       Events:
         SearchApi:
           Type: HttpApi

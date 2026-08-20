@@ -48,7 +48,9 @@ RUN pip install --upgrade pip \
         "tokenizers>=0.19" \
         "mangum>=0.17" \
         "fastapi>=0.111" \
-        "uvicorn[standard]>=0.30"
+        "uvicorn[standard]>=0.30" \
+        "google-genai>=1.0" \
+        "boto3>=1.34"
 
 COPY --from=exporter /opt/models ${LAMBDA_TASK_ROOT}/models
 COPY src/sarr ${LAMBDA_TASK_ROOT}/sarr

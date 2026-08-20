@@ -25,6 +25,8 @@ env/
 .env
 .env.*
 !.env.example
+infra/deploy.env
+samconfig.toml
 *.pem
 credentials.json
 *-key.json

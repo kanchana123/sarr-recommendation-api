@@ -1,4 +1,6 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8080";
+// Vite `base: "./"` — a leading slash breaks GitHub Pages (`/repo/gemini.svg`).
+const GEMINI_ICON = `${import.meta.env.BASE_URL}gemini.svg`;
 
 const form = document.getElementById("search-form");
 const statusEl = document.getElementById("status");
@@ -130,7 +132,7 @@ function renderRankedList(data, clientMs, requestedRerank) {
 function geminiBadge(title, subtitle = "Generated with Gemini") {
   return `
     <div class="ai-header">
-      <img src="/gemini.svg" class="gemini-icon" width="28" height="28" alt="" aria-hidden="true" />
+      <img src="${GEMINI_ICON}" class="gemini-icon" width="28" height="28" alt="" aria-hidden="true" />
       <div class="ai-header-text">
         <h2 class="rec-heading">${escapeHtml(title)}</h2>
         <p class="ai-label">${escapeHtml(subtitle)}</p>
@@ -157,7 +159,7 @@ function renderRecommendations(data) {
       <div class="hit-top">
         <h3>${index + 1}. ${escapeHtml(rec.package)}</h3>
         <span class="ai-chip">
-          <img src="/gemini.svg" class="gemini-icon gemini-icon-sm" width="16" height="16" alt="" aria-hidden="true" />
+          <img src="${GEMINI_ICON}" class="gemini-icon gemini-icon-sm" width="16" height="16" alt="" aria-hidden="true" />
           Gemini
         </span>
       </div>

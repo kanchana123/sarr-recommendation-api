@@ -6,6 +6,7 @@ import logging
 from collections.abc import Iterator
 from typing import Protocol
 
+from sarr.api.gcp_auth import vertex_credentials
 from sarr.common.config import Settings, get_settings
 
 logger = logging.getLogger("sarr.api")
@@ -56,11 +57,15 @@ class VertexGeminiStreamer:
         if self._client is None:
             from google import genai
 
-            self._client = genai.Client(
-                vertexai=True,
-                project=self.settings.gcp_project_id,
-                location=self.settings.vertex_location,
-            )
+            kwargs: dict = {
+                "vertexai": True,
+                "project": self.settings.gcp_project_id,
+                "location": self.settings.vertex_location,
+            }
+            creds = vertex_credentials(self.settings)
+            if creds is not None:
+                kwargs["credentials"] = creds
+            self._client = genai.Client(**kwargs)
         return self._client
 
     def _stream_model(self, client, model: str, prompt: str) -> Iterator[str]:
