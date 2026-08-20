@@ -82,7 +82,9 @@ Pipeline:
    that is not in the retrieved eight. Stream `llm_done` or `llm_error`.
 
 Local defaults: `VERTEX_GEMINI_MODEL=gemini-2.5-flash-lite` with fallback
-`gemini-2.5-flash`. Set `GCP_PROJECT_ID` and use Application Default Credentials.
+`gemini-2.5-flash`. Set `GCP_PROJECT_ID`. Locally, use `gcloud auth
+application-default login`. On Lambda, put a Vertex service account JSON in
+Secrets Manager (`sarr-search/gcp-vertex`); laptop ADC is not available there.
 Vertex billing must be enabled. API Gateway HTTP APIs do not stream SSE well;
 run RAG locally (`make run-api`) or on Cloud Run.
 
@@ -93,7 +95,10 @@ curl -N http://localhost:8080/v1/rag \
 ```
 
 A local measured UI run (warm, rerank on) reported fast path **472 ms** and
-Gemini top-3 **1.05 s** (`llm_ms`). Citations in that run had `dropped: []`.
+Gemini top-3 **1.05 s** (`llm_ms`). On the hosted demo (warm, rerank + LLM):
+ranked list **~350–520 ms** server `took_ms`, Gemini **~650 ms–1.2 s**
+(`llm_ms`). API Gateway may buffer SSE, so the UI can receive both events
+together.
 
 ---
 
@@ -107,11 +112,12 @@ Latency below is **server `took_ms`** (embed + Qdrant + optional rerank + blend)
 | Corpus freshness | — | Libraries.io slice; newest `latest_release` in this dump is **Dec 2018** |
 | Cold, `rerank=false` | **~5 s** | First request after idle; loads ONNX bi-encoder |
 | Cold, `rerank=true` | **~16 s** | Also loads ONNX MiniLM cross-encoder |
-| Warm, `rerank=false` | **p50 18 ms · p95 26 ms · p99 30 ms** | 50 sequential mixed queries |
-| Warm, `rerank=true` | **p50 176 ms · p95 266 ms · p99 270 ms** | ~160 ms extra for the cross-encoder; a typical UI call is ~200–230 ms |
-| Warm stages | embed **~7 ms**, Qdrant **~9–11 ms** (p50) | Same with or without rerank |
+| Warm, `rerank=false` | **p50 18 ms · p95 65 ms · p99 67 ms** | 50 sequential mixed queries |
+| Warm, `rerank=true` | **p50 172 ms · p95 257 ms** | ~154 ms extra for the cross-encoder; client p50 ~271 ms |
+| Warm stages | embed **~7 ms**, Qdrant **~10 ms** (p50) | Same embed/Qdrant split with or without rerank |
+| Hosted RAG (warm, rerank + LLM) | ranked **~350–520 ms** · Gemini **~650 ms–1.2 s** | Server `took_ms` + `llm_ms`; SSE may not stream on API Gateway |
 
-Warm percentiles: `scripts/measure_latency.py`, 15 Aug 2026, 1 warmup + 50 requests, all succeeded. Client RTT from this laptop was p50 **~122 ms** (no rerank) and **~276 ms** (rerank). API Gateway HTTP APIs still cap the client wait at **30 s**, which is why Lambda uses ONNX instead of importing PyTorch.
+Warm percentiles: `scripts/measure_latency.py`, **20 Aug 2026**, 1 warmup + 50 requests against the live API (`isz2aki1n2…`), all succeeded. Client RTT from this machine: p50 **117 ms** (no rerank), **271 ms** (rerank); p95 **193 ms** / **421 ms**. A cold `rerank=true` request can hit API Gateway’s **30 s** limit (503) while ONNX sessions load — warmup once before measuring. API Gateway HTTP APIs still cap the client wait at **30 s**, which is why Lambda uses ONNX instead of importing PyTorch.
 
 Each response also includes `took_ms` and `timing_ms` (`embed_ms`, `qdrant_ms`, `rerank_ms`).
 
@@ -120,10 +126,15 @@ Each response also includes `took_ms` and `timing_ms` (`embed_ms`, `qdrant_ms`, 
 Warmup **once**, then run sequential searches. Do not mix the first cold load into p50/p95.
 
 ```bash
-# Hosted API
+# Hosted API — no rerank
 python3 scripts/measure_latency.py \
   --url https://isz2aki1n2.execute-api.us-east-1.amazonaws.com \
   --n 50
+
+# Hosted API — with rerank (warm up once; cold start can 503 at 30 s)
+curl -s "$SARR_API_URL/v1/search" -H 'Content-Type: application/json' \
+  -d '{"query":"warmup","limit":5,"rerank":true}' >/dev/null
+python3 scripts/measure_latency.py --url "$SARR_API_URL" --n 50 --rerank --skip-warmup
 
 # Local API (start it first)
 export SARR_API_URL=http://localhost:8080
@@ -173,7 +184,8 @@ sarr-recommendation-api/
 ├── notebooks/      # Colab GPU ETL
 ├── frontend/       # Search · How it works · Contact
 ├── docker/         # API + Lambda images
-├── infra/          # SAM (API Gateway + Lambda)
+├── infra/          # SAM template, deploy.env.example, deploy docs
+├── scripts/        # setup_gcp_vertex_auth.sh, deploy_lambda.sh, measure_latency.py
 └── tests/          # unit (CI) + opt-in integration
 ```
 
@@ -273,19 +285,25 @@ QDRANT_URL=http://qdrant:6333 docker compose --profile local-qdrant up --build
 
 ### Deploy to AWS Lambda
 
-Container image + API Gateway via SAM. See **[infra/README.md](infra/README.md)** for the full walkthrough.
+Full pipeline: **[infra/README.md](infra/README.md)**.
 
 ```bash
-sam build --template infra/template.yaml --use-container
-sam deploy --guided
+cp infra/deploy.env.example infra/deploy.env   # Qdrant URL + key
+make gcp-setup-vertex                          # Vertex SA → Secrets Manager (before deploy)
+make deploy-lambda-guided                        # first time
+make deploy-lambda                               # later redeploys
+# or: make deploy-lambda-full                    # GCP auth + deploy in one step
 ```
 
-You will set `QdrantUrl`, `QdrantApiKey`, and `QdrantCollection` during deploy.
-The stack output `ApiUrl` is your public search endpoint (`/v1/search`, `/healthz`).
+Scripts live in `scripts/setup_gcp_vertex_auth.sh` and `scripts/deploy_lambda.sh`.
+SAM template: `infra/template.yaml`. Example config: `samconfig.toml.example`.
 
-The GitHub Pages demo is built by `.github/workflows/pages.yml`. Set repository
-variable `VITE_API_BASE_URL` to that `ApiUrl` (no trailing slash), enable Pages
-with **Source: GitHub Actions**, then run the **Deploy frontend** workflow.
+Stack output **ApiUrl** is the public endpoint (`/v1/search`, `/v1/rag`, `/healthz`).
+Set `GcpProjectId=sarr-505305` (default) plus the GCP secret from `make gcp-setup-vertex`
+so the hosted UI **LLM** checkbox can call Vertex Gemini.
+
+GitHub Pages: set repository variable `VITE_API_BASE_URL` to that `ApiUrl`, enable Pages
+with **Source: GitHub Actions**, then run **Deploy frontend** (`.github/workflows/pages.yml`).
 
 ### ETL (Colab)
 
@@ -315,7 +333,7 @@ OpenAPI docs: `http://localhost:8080/docs`
 
 The demo UI has two independent checkboxes. **Rerank** sends `rerank` on `/v1/search` (or on `/v1/rag` when LLM is also on). **LLM** is the only control that calls `/v1/rag` and Gemini.
 
-`POST /v1/rag` streams Server-Sent Events. The ranked list is emitted first; generation uses Vertex Gemini (`GCP_PROJECT_ID`, ADC). API Gateway HTTP APIs do not stream well — run this path locally or on Cloud Run. The eval harness (precision@k, citation accuracy, faithfulness, cost) is a follow-on deliverable.
+`POST /v1/rag` streams Server-Sent Events. The ranked list is emitted first; generation uses Vertex Gemini (`GCP_PROJECT_ID` plus ADC locally, or a Secrets Manager service account on Lambda). API Gateway HTTP APIs do not stream well — run this path locally or on Cloud Run. The eval harness (precision@k, citation accuracy, faithfulness, cost) is a follow-on deliverable.
 
 ---
 

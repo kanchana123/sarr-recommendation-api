@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     vertex_location: str = "us-central1"
     vertex_gemini_model: str = "gemini-2.5-flash-lite"
     vertex_gemini_fallback_model: str = "gemini-2.5-flash"
+    # Lambda: Secrets Manager secret id/ARN of a GCP service account JSON.
+    # Local: leave empty and use gcloud ADC, or set GCP_SERVICE_ACCOUNT_JSON.
+    gcp_credentials_secret_arn: str = ""
+    gcp_service_account_json: str = ""
 
     # Ranking blend weights
     rank_alpha: float = 0.75
