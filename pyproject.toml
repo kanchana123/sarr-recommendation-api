@@ -43,11 +43,16 @@ dev = [
   "mypy>=1.10",
   "httpx>=0.27",
 ]
-all = ["sarr[api,etl,dev]"]
+mcp = [
+  "mcp>=1.4,<2",
+  "httpx>=0.27",
+]
+all = ["sarr[api,etl,dev,mcp]"]
 
 [project.scripts]
 sarr = "sarr.cli:main"
 sarr-api = "sarr.api.local:main"
+sarr-mcp = "sarr.mcp.server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

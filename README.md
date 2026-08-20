@@ -180,6 +180,7 @@ sarr-recommendation-api/
 ├── src/sarr/
 │   ├── common/     # schemas, search-document builder, settings
 │   ├── api/        # FastAPI, embedder, reranker, RAG + Gemini, ranking, Qdrant client
+│   ├── mcp/        # MCP stdio tools → HTTP API (search + RAG)
 │   └── etl/        # BigQuery extract → transform → embed → load
 ├── notebooks/      # Colab GPU ETL
 ├── frontend/       # Search · How it works · Contact
@@ -231,6 +232,32 @@ In-process mode (no server; loads models locally):
 ```bash
 pip install -e ".[api]"
 sarr search "http client" --local
+```
+
+### MCP (agents / Cursor)
+
+Stdio MCP server that wraps the HTTP API — no ONNX or Gemini loaded in the MCP process.
+
+```bash
+make install-mcp
+make run-api   # terminal 1 — API must be running
+
+# terminal 2 — stdio server (Cursor / Claude Desktop)
+export SARR_API_URL=http://localhost:8080
+make run-mcp
+# or: python -m sarr.mcp.server   (after install-mcp, from repo root)
+```
+
+| Tool | API | Purpose |
+|---|---|---|
+| `search_packages` | `POST /v1/search` | Fast semantic search |
+| `recommend_packages` | `POST /v1/rag` | Ranked hits + grounded top-3 (SSE → one JSON blob) |
+| `health` | `GET /healthz` | Liveness |
+
+Copy [`.cursor/mcp.json.example`](.cursor/mcp.json.example) to `.cursor/mcp.json` (or add to user MCP settings). Point `SARR_API_URL` at `http://localhost:8080` for full RAG; the hosted Lambda URL works for `search_packages` and `recommend_packages` (SSE may arrive in one block on API Gateway).
+
+```bash
+mcp dev src/sarr/mcp/server.py   # optional: MCP Inspector (needs mcp[cli])
 ```
 
 ```bash

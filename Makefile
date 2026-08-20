@@ -1,13 +1,16 @@
-.PHONY: help install install-dev test lint format run-api latency docker-build docker-up docker-down docker-logs docker-build-api docker-build-lambda gcp-setup-vertex deploy-lambda deploy-lambda-guided deploy-lambda-full sam-build sam-deploy-guided sam-deploy sam-delete
+.PHONY: help install install-dev install-mcp test lint format run-api run-mcp latency docker-build docker-up docker-down docker-logs docker-build-api docker-build-lambda gcp-setup-vertex deploy-lambda deploy-lambda-guided deploy-lambda-full sam-build sam-deploy-guided sam-deploy sam-delete
 
 SAM_TEMPLATE := infra/template.yaml
 SAM_STACK ?= sarr-search
+PYTHON := $(shell test -x .venv/bin/python && echo .venv/bin/python || echo python3)
 
 help:
 	@echo "SARR common targets:"
 	@echo "  make install              Install API deps"
 	@echo "  make install-dev          Install all optional deps including tests"
+	@echo "  make install-mcp          Install MCP stdio server deps (sarr[mcp])"
 	@echo "  make run-api              Run search API locally on :8080"
+	@echo "  make run-mcp              Run MCP stdio server (run make install-mcp first)"
 	@echo "  make test                 Run unit tests"
 	@echo "  make lint                 Ruff check"
 	@echo "  make docker-build         Build sarr-api:latest image"
@@ -31,8 +34,14 @@ install:
 install-dev:
 	pip install -e ".[all]"
 
+install-mcp:
+	$(PYTHON) -m pip install -e ".[mcp]"
+
 run-api:
-	uvicorn sarr.api.app:app --host 0.0.0.0 --port 8080
+	$(PYTHON) -m uvicorn sarr.api.app:app --host 0.0.0.0 --port 8080
+
+run-mcp: install-mcp
+	$(PYTHON) -m sarr.mcp.server
 
 test:
 	pytest tests/unit -m unit
