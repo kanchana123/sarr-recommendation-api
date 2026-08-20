@@ -38,13 +38,24 @@ class SearchService:
                 (time.perf_counter() - started) * 1000.0,
             )
 
-    def search(self, request: SearchRequest) -> SearchResponse:
+    def search(
+        self,
+        request: SearchRequest,
+        *,
+        retrieve_k: int | None = None,
+        rerank_k: int | None = None,
+        output_limit: int | None = None,
+    ) -> SearchResponse:
+        # Overrides let RAG use 50/50/8 without changing /v1/search defaults.
         rerank = (
             self.settings.rerank_enabled_default
             if request.rerank is None
             else request.rerank
         )
         timing_ms: dict[str, float] = {}
+        fetch_k = retrieve_k if retrieve_k is not None else self.settings.search_top_k
+        rerank_keep = rerank_k if rerank_k is not None else self.settings.rerank_top_k
+        limit = output_limit if output_limit is not None else request.limit
 
         t0 = time.perf_counter()
         query_vector = self.embedder.embed(request.query)
@@ -53,12 +64,12 @@ class SearchService:
         t1 = time.perf_counter()
         raw_hits = self.vector_store.search(
             query_vector,
-            limit=max(self.settings.search_top_k, request.limit),
+            limit=max(fetch_k, limit),
             query_filter=self._build_filter(request),
         )
         timing_ms["qdrant_ms"] = round((time.perf_counter() - t1) * 1000.0, 1)
 
-        candidates = raw_hits[: self.settings.rerank_top_k] if rerank else raw_hits
+        candidates = raw_hits[:rerank_keep] if rerank else raw_hits
         relevance_scores = [hit["score"] for hit in candidates]
 
         if rerank and candidates:
@@ -95,7 +106,7 @@ class SearchService:
             scored.append((final, hit))
 
         scored.sort(key=lambda item: item[0], reverse=True)
-        results = [self._to_hit(score, hit) for score, hit in scored[: request.limit]]
+        results = [self._to_hit(score, hit) for score, hit in scored[:limit]]
         timing_ms["blend_ms"] = round((time.perf_counter() - t3) * 1000.0, 1)
 
         return SearchResponse(
