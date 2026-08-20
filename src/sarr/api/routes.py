@@ -81,6 +81,7 @@ def rag(request: RagRequest) -> StreamingResponse:
     """SSE: ranked_list first, then llm_delta tokens, then llm_done or llm_error."""
     service = get_rag_service()
     try:
+        # Run retrieval synchronously so retrieval errors become HTTP 502, not a half-open stream.
         ranked = service.retrieve(request)
     except Exception as exc:  # noqa: BLE001 — surfaced as HTTP 502 for MVP
         logger.exception("rag retrieve failed query=%r error=%s", request.query, exc)
@@ -95,6 +96,7 @@ def rag(request: RagRequest) -> StreamingResponse:
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
+            # Tell reverse proxies not to buffer; otherwise ranked_list waits for llm_done.
             "X-Accel-Buffering": "no",
         },
     )

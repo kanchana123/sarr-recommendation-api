@@ -23,6 +23,7 @@ class VertexGeminiStreamer:
         self._client = None
 
     def configured(self) -> bool:
+        # Lets RagService skip Gemini when GCP_PROJECT_ID is unset (ranked_list still works).
         return bool(self.settings.gcp_project_id)
 
     def stream(self, prompt: str) -> Iterator[str]:
@@ -46,6 +47,7 @@ class VertexGeminiStreamer:
             except Exception as exc:  # noqa: BLE001 — try fallback before any tokens
                 last_error = exc
                 logger.warning("gemini stream failed model=%s error=%s", model, exc)
+                # Do not switch models mid-stream; partial JSON cannot be validated.
                 if yielded:
                     raise RuntimeError(f"Gemini streaming failed: {exc}") from exc
         raise RuntimeError(f"Gemini streaming failed: {last_error}") from last_error
@@ -70,6 +72,7 @@ class VertexGeminiStreamer:
             contents=prompt,
             config=types.GenerateContentConfig(
                 temperature=0.2,
+                # Ask Vertex for JSON so validate_recommendations can parse a fixed shape.
                 response_mime_type="application/json",
             ),
         )

@@ -21,8 +21,8 @@
         <header class="header">
           <h1>Semantic PyPI search</h1>
         <p class="tagline">
-            Find packages by meaning, then a grounded top-3 with citations
-            from the retrieved descriptions.
+            Find packages by meaning. Optional rerank and Gemini
+            recommendations are controlled by the checkboxes below.
           </p>
         </header>
 
@@ -36,10 +36,16 @@
             required
           />
           <div class="controls">
-            <label class="rerank-control">
-              <input id="rerank" name="rerank" type="checkbox" checked />
-              Rerank
-            </label>
+            <div class="option-controls">
+              <label class="rerank-control">
+                <input id="rerank" name="rerank" type="checkbox" checked />
+                Rerank
+              </label>
+              <label class="rerank-control">
+                <input id="llm" name="llm" type="checkbox" />
+                LLM
+              </label>
+            </div>
             <button type="submit">Search</button>
           </div>
         </form>

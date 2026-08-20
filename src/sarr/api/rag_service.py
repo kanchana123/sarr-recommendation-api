@@ -19,6 +19,7 @@ logger = logging.getLogger("sarr.api")
 
 
 def format_sse(event: str, data: Any) -> str:
+    # One SSE message: event name + JSON payload, blank line terminates the frame.
     payload = json.dumps(data, default=str)
     return f"event: {event}\ndata: {payload}\n\n"
 
@@ -35,11 +36,13 @@ class RagService:
         self.llm = llm or VertexGeminiStreamer(self.settings)
 
     def retrieve(self, request: RagRequest) -> SearchResponse:
+        # Fetch 50, keep 8 for Gemini. Cross-encoder runs only when request.rerank is true.
         started = time.perf_counter()
+        rerank = True if request.rerank is None else request.rerank
         search_request = SearchRequest(
             query=request.query,
             limit=self.settings.rag_context_k,
-            rerank=True,
+            rerank=rerank,
             filters=request.filters,
         )
         ranked = self.search_service.search(
@@ -56,6 +59,7 @@ class RagService:
         yield from self.stream_generation(request.query, ranked)
 
     def stream_generation(self, query: str, ranked: SearchResponse) -> Iterator[str]:
+        # Fork A: emit the reranked list immediately so the UI is useful without the LLM.
         yield format_sse(
             "ranked_list",
             ranked.model_dump(mode="json"),
@@ -70,6 +74,7 @@ class RagService:
 
         configured = getattr(self.llm, "configured", None)
         if callable(configured) and not configured():
+            # Fork A only: Vertex needs GCP_PROJECT_ID; ranked_list is still a complete answer.
             yield format_sse(
                 "llm_error",
                 {
@@ -85,6 +90,7 @@ class RagService:
         accumulated = ""
         llm_started = time.perf_counter()
         try:
+            # Fork B: stream tokens to the client; validate only after the full JSON arrives.
             for token in self.llm.stream(prompt):
                 accumulated += token
                 yield format_sse("llm_delta", {"text": token})
@@ -99,6 +105,7 @@ class RagService:
             return
 
         result = validate_recommendations(accumulated, ranked.results)
+        # llm_done: validated recommendations; dropped = hallucinated package names.
         yield format_sse(
             "llm_done",
             {

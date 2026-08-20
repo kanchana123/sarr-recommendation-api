@@ -26,6 +26,7 @@ must be copied from that same package's description text.
 
 
 def context_block(hits: list[SearchHit]) -> str:
+    # Only name + description go to the LLM; stars and URLs stay out of generation context.
     lines: list[str] = []
     for index, hit in enumerate(hits, start=1):
         description = (hit.summary or "").strip() or "(no description)"

@@ -5,11 +5,13 @@ const statusEl = document.getElementById("status");
 const resultsEl = document.getElementById("results");
 const recsEl = document.getElementById("recommendations");
 const rerankInput = document.getElementById("rerank");
+const llmInput = document.getElementById("llm");
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const query = document.getElementById("query").value.trim();
   const rerank = rerankInput.checked;
+  const useLlm = llmInput.checked;
 
   statusEl.textContent = "Searching…";
   resultsEl.innerHTML = "";
@@ -18,12 +20,13 @@ form.addEventListener("submit", async (event) => {
   const clientStarted = performance.now();
 
   try {
-    if (rerank) {
-      await runRag(query, clientStarted);
+    // LLM checked → RAG + Gemini. Otherwise classic search; Rerank only affects ranking.
+    if (useLlm) {
+      await runRag(query, rerank, clientStarted);
       return;
     }
 
-    await runClassicSearch(query, false, clientStarted);
+    await runClassicSearch(query, rerank, clientStarted);
   } catch (error) {
     const clientMs = performance.now() - clientStarted;
     const detail = error instanceof Error ? error.message : "Search failed";
@@ -45,11 +48,11 @@ async function runClassicSearch(query, rerank, clientStarted) {
   renderRankedList(data, clientMs, rerank);
 }
 
-async function runRag(query, clientStarted) {
+async function runRag(query, rerank, clientStarted) {
   const response = await fetch(`${API_BASE}/v1/rag`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-    body: JSON.stringify({ query }),
+    body: JSON.stringify({ query, rerank }),
   });
   if (!response.ok) {
     throw new Error(`API ${response.status}: ${await response.text()}`);
@@ -60,10 +63,15 @@ async function runRag(query, clientStarted) {
 
   await readSse(response, (event, data) => {
     if (event === "ranked_list") {
+      // Fork A: show reranked hits as soon as retrieval finishes.
       clientMsAtList.value = performance.now() - clientStarted;
-      renderRankedList(data, clientMsAtList.value, true);
+      renderRankedList(data, clientMsAtList.value, rerank);
       statusEl.textContent += " Generating a grounded top-3…";
-      recsEl.innerHTML = `<article class="rec rec-draft"><h2>Recommendation</h2><pre class="rec-stream"></pre></article>`;
+      recsEl.innerHTML = `
+        <article class="rec rec-draft rec-ai">
+          ${geminiBadge("Generating recommendations…", "Streaming from Gemini")}
+          <pre class="rec-stream"></pre>
+        </article>`;
     } else if (event === "llm_delta") {
       draft += data.text || "";
       const streamEl = recsEl.querySelector(".rec-stream");
@@ -81,6 +89,7 @@ async function runRag(query, clientStarted) {
       }
       statusEl.textContent += llmNote;
     } else if (event === "llm_error") {
+      // Fork A still stands; generation is optional.
       recsEl.innerHTML = "";
       statusEl.textContent += ` ${data.message || "Generation failed."} Ranked results above still apply.`;
     }
@@ -118,6 +127,18 @@ function renderRankedList(data, clientMs, requestedRerank) {
   }
 }
 
+function geminiBadge(title, subtitle = "Generated with Gemini") {
+  return `
+    <div class="ai-header">
+      <img src="/gemini.svg" class="gemini-icon" width="28" height="28" alt="" aria-hidden="true" />
+      <div class="ai-header-text">
+        <h2 class="rec-heading">${escapeHtml(title)}</h2>
+        <p class="ai-label">${escapeHtml(subtitle)}</p>
+      </div>
+    </div>
+  `;
+}
+
 function renderRecommendations(data) {
   const recs = data.recommendations || [];
   if (!recs.length) {
@@ -125,16 +146,20 @@ function renderRecommendations(data) {
       "<p class=\"meta\">No grounded recommendations passed citation checks.</p>";
     return;
   }
-  recsEl.innerHTML = `<h2 class="rec-heading">Grounded top-3</h2>`;
+  recsEl.innerHTML = geminiBadge("Grounded top-3");
   recs.forEach((rec, index) => {
     const article = document.createElement("article");
-    article.className = "rec";
+    article.className = "rec rec-ai";
     const warn = rec.snippet_in_description
       ? ""
       : `<p class="meta">Cited snippet was not found verbatim in the stored description.</p>`;
     article.innerHTML = `
       <div class="hit-top">
-        <h2>${index + 1}. ${escapeHtml(rec.package)}</h2>
+        <h3>${index + 1}. ${escapeHtml(rec.package)}</h3>
+        <span class="ai-chip">
+          <img src="/gemini.svg" class="gemini-icon gemini-icon-sm" width="16" height="16" alt="" aria-hidden="true" />
+          Gemini
+        </span>
       </div>
       <p>${escapeHtml(rec.reason)}</p>
       <blockquote>${escapeHtml(rec.cited_snippet)}</blockquote>
@@ -145,6 +170,7 @@ function renderRecommendations(data) {
 }
 
 async function readSse(response, onEvent) {
+  // Parse text/event-stream frames split by blank lines (event + data lines).
   if (!response.body) {
     throw new Error("No response body for SSE");
   }

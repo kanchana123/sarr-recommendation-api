@@ -21,8 +21,8 @@
         <header class="header">
           <h1>How SARR finds packages</h1>
           <p class="tagline">
-            A retrieval stack built for intent — embeddings, vector search, and
-            ranking that mixes meaning with real-world adoption.
+            Embeddings, vector search, optional rerank, and an optional
+            Gemini top-3 grounded in retrieved package descriptions.
           </p>
         </header>
 
@@ -52,7 +52,9 @@
           <p>
             Indexing is a rare GPU job (Colab, <strong>PyTorch</strong>). Serving
             only embeds the query, retrieves neighbors from Qdrant, optionally
-            reranks, and blends in adoption and recency. On Lambda both the
+            reranks, and blends in adoption and recency. If you check
+            <em>LLM</em>, a second path asks Vertex Gemini for a grounded
+            top-3 from those retrieved packages only. On Lambda both the
             bi-encoder and the cross-encoder run as <strong>ONNX</strong> — no
             PyTorch import on the request path. Both paths share the same
             <code>BAAI/bge-small-en-v1.5</code> checkpoint and document format.
@@ -85,8 +87,8 @@
               Per request: ONNX query embed (384-d), ANN cosine top-k in Qdrant,
               optional ONNX cross-encoder when <code>rerank=true</code>, then
               <code>0.75·relevance + 0.15·popularity + 0.10·recency</code>.
-              The JSON response includes <code>took_ms</code> (server-side
-              latency).
+              Checking <em>LLM</em> adds a second fork: those ranked hits stream
+              first, then Vertex Gemini writes a citation-checked top-3.
             </figcaption>
           </figure>
         </section>
@@ -117,7 +119,7 @@
               <strong>Refine when needed.</strong> If you check <em>Rerank</em>,
               the UI sends <code>rerank: true</code> and an ONNX MiniLM
               cross-encoder rescores the short top‑k list. No PyTorch import
-              on Lambda.
+              on Lambda. This checkbox does not call Gemini.
             </li>
             <li>
               <strong>Blend for usefulness.</strong> The final score mixes
@@ -125,7 +127,60 @@
               and release recency. Popularity stays in structured payload fields
               so it influences rank without polluting the embedding text.
             </li>
+            <li>
+              <strong>Grounded recommendations (optional).</strong> If you check
+              <em>LLM</em>, the UI calls <code>POST /v1/rag</code>. Gemini
+              writes a top-3 from the retrieved names and descriptions only.
+              Packages not in that set are dropped. If generation fails, the
+              ranked list is still the result. Leave LLM unchecked for search
+              without an LLM call.
+            </li>
           </ol>
+        </section>
+
+        <section>
+          <h2>Grounded RAG (what shipped)</h2>
+          <p>
+            Search and generation are separate. Classic search still uses
+            <code>POST /v1/search</code>. Checking <em>LLM</em> on the demo
+            calls <code>POST /v1/rag</code> and streams Server-Sent Events.
+            Checking <em>Rerank</em> only runs the ONNX cross-encoder; it
+            does not call Gemini.
+          </p>
+          <ol class="steps">
+            <li>
+              Retrieve 50 neighbors from Qdrant (same bi-encoder as search).
+            </li>
+            <li>
+              If <em>Rerank</em> is on, the MiniLM cross-encoder scores those
+              50; otherwise ranking uses cosine plus the popularity/recency
+              blend. The API keeps the top 8 for the prompt.
+            </li>
+            <li>
+              Emit <code>ranked_list</code> immediately. That list is a
+              complete result if Gemini is slow or fails.
+            </li>
+            <li>
+              Vertex Gemini (<code>gemini-2.5-flash-lite</code>, fallback
+              <code>gemini-2.5-flash</code>) sees only package name and
+              description. It returns JSON with exactly three
+              <code>package</code>, <code>reason</code>, and
+              <code>cited_snippet</code> fields.
+            </li>
+            <li>
+              The backend drops any <code>package</code> not in the eight
+              retrieved names, then emits <code>llm_done</code> (or
+              <code>llm_error</code>). The UI marks a Gemini icon on that
+              block so generated text is distinct from ranked hits.
+            </li>
+          </ol>
+          <p>
+            Generation needs <code>GCP_PROJECT_ID</code> and Vertex billing.
+            API Gateway HTTP APIs do not stream SSE well, so this path is
+            meant for local FastAPI or Cloud Run. A labeled eval set
+            (precision@k, citation accuracy, faithfulness) is still future
+            work — not part of the serving stack above.
+          </p>
         </section>
 
         <section>
@@ -146,6 +201,8 @@
                 <li>Handles descriptive queries without exact lexical overlap</li>
                 <li>Surfaces better-maintained, more adopted options when
                   relevance is close</li>
+                <li>Optional Gemini top-3, cited from retrieved descriptions
+                  only</li>
               </ul>
             </div>
           </div>
@@ -175,11 +232,13 @@
           </p>
           <p>
             Serving keeps the heavy lift out of the request path: corpus
-            embeddings are precomputed. Each hosted request only runs small
-            ONNX graphs for the query (and the cross-encoder when rerank is
-            on), hits Qdrant, and blends scores. The same FastAPI app runs
-            locally (sentence-transformers when no ONNX graph is present) and
-            on Lambda (ONNX Runtime, no PyTorch), with shared schemas and
+            embeddings are precomputed. Each hosted search request only runs
+            small ONNX graphs for the query (and the cross-encoder when
+            rerank is on), hits Qdrant, and blends scores. Gemini runs only
+            when the caller uses <code>/v1/rag</code> (the demo
+            <em>LLM</em> checkbox). The same FastAPI app runs locally
+            (sentence-transformers when no ONNX graph is present) and on
+            Lambda (ONNX Runtime, no PyTorch), with shared schemas and
             document formatting between ETL and search.
           </p>
         </section>
@@ -207,9 +266,10 @@
               for the cross-encoder; a typical UI call is ~200–230 ms).
             </li>
             <li>
-              Warm stages: query embed ~7 ms, Qdrant ~9–11 ms (p50). Client RTT
-              from this measurement was p50 ~122 ms (no rerank) and ~276 ms
-              (rerank), including the path to <code>us-east-1</code>.
+              Local RAG (warm, LLM + rerank on): ranked list
+              <strong>472 ms</strong> (fast path), Gemini top-3
+              <strong>1.05 s</strong> (<code>llm_ms</code>) for
+              <em>async HTTP client</em>.
             </li>
           </ul>
           <p>

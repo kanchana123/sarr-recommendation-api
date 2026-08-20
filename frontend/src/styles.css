@@ -108,6 +108,13 @@ body {
   gap: 1rem;
 }
 
+.option-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.85rem 1.1rem;
+}
+
 .rerank-control {
   display: inline-flex;
   align-items: center;
@@ -141,9 +148,59 @@ button {
   margin-top: 1.25rem;
 }
 
+.ai-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.15rem;
+}
+
+.ai-header-text {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.gemini-icon {
+  flex-shrink: 0;
+  display: block;
+}
+
+.gemini-icon-sm {
+  width: 16px;
+  height: 16px;
+}
+
+.ai-label {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.ai-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #e8f0fe 0%, #f3e8fd 50%, #fde8ea 100%);
+  color: #5f6368;
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .rec-heading {
   margin: 0;
   font-size: 1.15rem;
+}
+
+.rec-ai {
+  border-color: #9b72cb;
+}
+
+.rec-ai h3 {
+  margin: 0;
+  font-size: 1.05rem;
 }
 
 .rec {

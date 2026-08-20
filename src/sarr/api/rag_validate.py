@@ -18,6 +18,7 @@ _FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
 
 
 def normalize_package_name(name: str) -> str:
+    # Match ETL normalization so "Requests" and "requests" resolve to the same hit.
     return name.strip().lower().replace("_", "-")
 
 
@@ -34,6 +35,7 @@ def parse_llm_json(raw: str) -> LlmRecommendationList:
 
 
 def validate_recommendations(raw: str, hits: list[SearchHit]) -> RagLlmResult:
+    # Hallucination guard: every package must appear in the retrieved context set.
     by_name = {normalize_package_name(hit.name): hit for hit in hits}
     dropped: list[str] = []
 
@@ -54,7 +56,7 @@ def validate_recommendations(raw: str, hits: list[SearchHit]) -> RagLlmResult:
             dropped.append(rec.package)
             continue
         if len(grounded) >= 3:
-            continue
+            continue  # Keep at most three even if the model returns more valid names.
         description = hit.summary or ""
         snippet = rec.cited_snippet.strip()
         grounded.append(
@@ -70,6 +72,7 @@ def validate_recommendations(raw: str, hits: list[SearchHit]) -> RagLlmResult:
 
 
 def _snippet_in_text(snippet: str, description: str) -> bool:
+    # Soft faithfulness check: flag when the quote is not a verbatim substring.
     if not snippet:
         return False
     return _fold(snippet) in _fold(description)

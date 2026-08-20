@@ -7,13 +7,14 @@ natural-language queries such as *“async HTTP client with retries”* or
 
 Offline indexing runs on GPU (Google Colab) with **PyTorch**. Online search
 embeds the query, retrieves neighbors, optionally reranks, and blends
-popularity and recency. Vectors live in **Qdrant Cloud**. The API is
-**FastAPI** on **AWS Lambda**, where both the bi-encoder and the
-cross-encoder run as **ONNX** (no PyTorch import on the request path). The
-demo UI is a static Vite app on **GitHub Pages**.
+popularity and recency. An optional **LLM** path (Vertex Gemini) writes a
+grounded top-3 from the retrieved packages only. Vectors live in **Qdrant
+Cloud**. The API is **FastAPI** on **AWS Lambda**, where both the bi-encoder
+and the cross-encoder run as **ONNX** (no PyTorch import on the request path).
+The demo UI is a static Vite app on **GitHub Pages**.
 
 - **Live demo:** [kanchana123.github.io/sarr-recommendation-api](https://kanchana123.github.io/sarr-recommendation-api/)
-- **API:** `https://isz2aki1n2.execute-api.us-east-1.amazonaws.com` (`/v1/search`, `/healthz`)
+- **API:** `https://isz2aki1n2.execute-api.us-east-1.amazonaws.com` (`/v1/search`, `/healthz`; RAG via local `/v1/rag`)
 - **Write-up:** [DEV Community](https://dev.to/kanchan_nannavare/sarr-semantic-search-for-pypi-packages-built-on-a-serverless-budget-o4n)
 
 ---
@@ -42,7 +43,8 @@ Request path inside the API (`took_ms` is server-side time):
 | Path | Role |
 |---|---|
 | **ETL** | Watermarked BigQuery extract → document build → PyTorch bi-encoder batch embed → idempotent Qdrant upsert |
-| **Online** | ONNX query embed → top‑k vector search → optional ONNX cross-encoder → α·relevance + β·popularity + δ·recency |
+| **Online search** | ONNX query embed → top‑k vector search → optional ONNX cross-encoder → α·relevance + β·popularity + δ·recency |
+| **Online RAG** | Same retrieval (50 → top 8) → SSE `ranked_list` → Vertex Gemini top-3 with citation checks |
 | **Shared** | Same embedding model and search-document format for index and query (no train/serve skew) |
 
 Designed so indexing (heavy, infrequent, GPU) stays separate from serving
@@ -55,11 +57,43 @@ Designed so indexing (heavy, infrequent, GPU) stays separate from serving
 
 - **Bi-encoder:** `BAAI/bge-small-en-v1.5` (384‑d). Colab ETL embeds the corpus with PyTorch; Lambda embeds queries with a baked ONNX graph.  
 - **ANN:** cosine similarity over the full collection in Qdrant  
-- **Rerank (optional):** `cross-encoder/ms-marco-MiniLM-L-6-v2` on a short top‑k list. Hosted Lambda runs this as ONNX as well (`rerank: true` in `POST /v1/search`).  
+- **Rerank (optional):** `cross-encoder/ms-marco-MiniLM-L-6-v2` on a short top‑k list. Hosted Lambda runs this as ONNX as well (`rerank: true` in `POST /v1/search`). The demo **Rerank** checkbox controls this only.  
+- **LLM / RAG (optional):** `POST /v1/rag` when the demo **LLM** checkbox is on. Gemini writes a citation-checked top-3 from the retrieved set. Generation does not run unless that box is checked.  
 - **Blend:** semantic score mixed with stars / dependents / SourceRank and release recency  
 
 Numeric popularity is kept in the **payload**, not stuffed into the embedding
 text, so similarity stays about *what the package does*.
+
+---
+
+## RAG (grounded recommendations)
+
+`POST /v1/rag` is opt-in. The demo **LLM** checkbox is the only UI control that
+calls it. **Rerank** only toggles the cross-encoder (`rerank: true|false` on
+search or RAG).
+
+Pipeline:
+
+1. Retrieve 50 neighbors (same embedder and Qdrant collection as `/v1/search`).
+2. Optionally rerank those 50 with MiniLM; keep 8 packages for the prompt.
+3. Stream `ranked_list` first so the UI is complete without Gemini.
+4. Prompt Gemini with **name + description only** (no stars or URLs).
+5. Parse JSON (`package`, `reason`, `cited_snippet`). Drop any package name
+   that is not in the retrieved eight. Stream `llm_done` or `llm_error`.
+
+Local defaults: `VERTEX_GEMINI_MODEL=gemini-2.5-flash-lite` with fallback
+`gemini-2.5-flash`. Set `GCP_PROJECT_ID` and use Application Default Credentials.
+Vertex billing must be enabled. API Gateway HTTP APIs do not stream SSE well;
+run RAG locally (`make run-api`) or on Cloud Run.
+
+```bash
+curl -N http://localhost:8080/v1/rag \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"async HTTP client","rerank":true}'
+```
+
+A local measured UI run (warm, rerank on) reported fast path **472 ms** and
+Gemini top-3 **1.05 s** (`llm_ms`). Citations in that run had `dropped: []`.
 
 ---
 
@@ -118,9 +152,9 @@ id).
 | Layer | Choice |
 |---|---|
 | Data | BigQuery public Libraries.io (`projects` ⨝ `repositories`), PyPI filter |
-| ML | sentence-transformers / PyTorch (ETL); ONNX Runtime (Lambda embed + rerank) |
+| ML | sentence-transformers / PyTorch (ETL); ONNX Runtime (Lambda embed + rerank); Vertex Gemini (optional RAG) |
 | Store | Qdrant Cloud |
-| API | FastAPI, Pydantic v2, Mangum (Lambda) |
+| API | FastAPI, Pydantic v2, Mangum (Lambda); SSE on `POST /v1/rag` |
 | Packaging | `src/` layout, `pyproject.toml`, optional extras (`api` / `etl` / `dev`) |
 | UI | Vite static multi-page demo |
 | Quality | pytest unit suite, Ruff, GitHub Actions CI |
@@ -134,7 +168,7 @@ id).
 sarr-recommendation-api/
 ├── src/sarr/
 │   ├── common/     # schemas, search-document builder, settings
-│   ├── api/        # FastAPI, embedder, reranker, ranking, Qdrant client
+│   ├── api/        # FastAPI, embedder, reranker, RAG + Gemini, ranking, Qdrant client
 │   └── etl/        # BigQuery extract → transform → embed → load
 ├── notebooks/      # Colab GPU ETL
 ├── frontend/       # Search · How it works · Contact
@@ -275,11 +309,13 @@ make test
 |---|---|---|
 | `GET` | `/healthz` | Liveness |
 | `POST` | `/v1/search` | `{ "query", "limit", "rerank" }` → ranked hits + `took_ms` |
-| `POST` | `/v1/rag` | `{ "query" }` → SSE `ranked_list`, then `llm_delta` / `llm_done` (Vertex Gemini, citation-checked top-3) |
+| `POST` | `/v1/rag` | `{ "query", "rerank" }` → SSE `ranked_list`, then `llm_delta` / `llm_done` (Vertex Gemini, citation-checked top-3) |
 
 OpenAPI docs: `http://localhost:8080/docs`
 
-`POST /v1/rag` streams Server-Sent Events. The ranked list is emitted first; generation uses Vertex AI Gemini (`GCP_PROJECT_ID`, ADC). API Gateway HTTP APIs do not stream well — run this path locally or on Cloud Run. The eval harness (precision@k, citation accuracy, faithfulness, cost) is a follow-on deliverable.
+The demo UI has two independent checkboxes. **Rerank** sends `rerank` on `/v1/search` (or on `/v1/rag` when LLM is also on). **LLM** is the only control that calls `/v1/rag` and Gemini.
+
+`POST /v1/rag` streams Server-Sent Events. The ranked list is emitted first; generation uses Vertex Gemini (`GCP_PROJECT_ID`, ADC). API Gateway HTTP APIs do not stream well — run this path locally or on Cloud Run. The eval harness (precision@k, citation accuracy, faithfulness, cost) is a follow-on deliverable.
 
 ---
 

@@ -46,6 +46,7 @@ class SearchService:
         rerank_k: int | None = None,
         output_limit: int | None = None,
     ) -> SearchResponse:
+        # Overrides let RAG use 50/50/8 without changing /v1/search defaults.
         rerank = (
             self.settings.rerank_enabled_default
             if request.rerank is None
