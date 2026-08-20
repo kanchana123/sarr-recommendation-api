@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "sarr": {
+      "command": "${workspaceFolder}/.venv/bin/python",
+      "args": ["-m", "sarr.mcp.server"],
+      "env": {
+        "SARR_API_URL": "http://localhost:8080"
+      }
+    }
+  }
+}

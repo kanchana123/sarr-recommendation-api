@@ -11,10 +11,12 @@ popularity and recency. An optional **LLM** path (Vertex Gemini) writes a
 grounded top-3 from the retrieved packages only. Vectors live in **Qdrant
 Cloud**. The API is **FastAPI** on **AWS Lambda**, where both the bi-encoder
 and the cross-encoder run as **ONNX** (no PyTorch import on the request path).
-The demo UI is a static Vite app on **GitHub Pages**.
+The demo UI is a static Vite app on **GitHub Pages**. An optional **MCP**
+stdio server lets coding agents call the same API as tools (`search_packages`,
+`recommend_packages`, `health`) without loading ONNX or Gemini locally.
 
 - **Live demo:** [kanchana123.github.io/sarr-recommendation-api](https://kanchana123.github.io/sarr-recommendation-api/)
-- **API:** `https://isz2aki1n2.execute-api.us-east-1.amazonaws.com` (`/v1/search`, `/healthz`; RAG via local `/v1/rag`)
+- **API:** `https://isz2aki1n2.execute-api.us-east-1.amazonaws.com` (`/v1/search`, `/v1/rag`, `/healthz`)
 - **Write-up:** [DEV Community](https://dev.to/kanchan_nannavare/sarr-semantic-search-for-pypi-packages-built-on-a-serverless-budget-o4n)
 
 ---
@@ -45,6 +47,7 @@ Request path inside the API (`took_ms` is server-side time):
 | **ETL** | Watermarked BigQuery extract → document build → PyTorch bi-encoder batch embed → idempotent Qdrant upsert |
 | **Online search** | ONNX query embed → top‑k vector search → optional ONNX cross-encoder → α·relevance + β·popularity + δ·recency |
 | **Online RAG** | Same retrieval (50 → top 8) → SSE `ranked_list` → Vertex Gemini top-3 with citation checks |
+| **MCP (agents)** | Local stdio server → HTTP to the API; RAG SSE collapsed to one JSON tool result |
 | **Shared** | Same embedding model and search-document format for index and query (no train/serve skew) |
 
 Designed so indexing (heavy, infrequent, GPU) stays separate from serving
@@ -168,6 +171,7 @@ id).
 | API | FastAPI, Pydantic v2, Mangum (Lambda); SSE on `POST /v1/rag` |
 | Packaging | `src/` layout, `pyproject.toml`, optional extras (`api` / `etl` / `dev`) |
 | UI | Vite static multi-page demo |
+| Agents | MCP stdio server (`sarr[mcp]`) — tools wrap `/v1/search`, `/v1/rag`, `/healthz` |
 | Quality | pytest unit suite, Ruff, GitHub Actions CI |
 | Deploy artifacts | Docker (local API + Lambda image), SAM template |
 
@@ -180,6 +184,7 @@ sarr-recommendation-api/
 ├── src/sarr/
 │   ├── common/     # schemas, search-document builder, settings
 │   ├── api/        # FastAPI, embedder, reranker, RAG + Gemini, ranking, Qdrant client
+│   ├── mcp/        # MCP stdio tools → HTTP API (search + RAG)
 │   └── etl/        # BigQuery extract → transform → embed → load
 ├── notebooks/      # Colab GPU ETL
 ├── frontend/       # Search · How it works · Contact
@@ -231,6 +236,52 @@ In-process mode (no server; loads models locally):
 ```bash
 pip install -e ".[api]"
 sarr search "http client" --local
+```
+
+### MCP (agents / Cursor)
+
+Thin **stdio wrapper** around the HTTP API. The MCP process uses `httpx` only —
+no ONNX, Qdrant, or Gemini loaded in the agent's MCP child process. **Does not
+run on Lambda**; run it locally (or on any machine with Cursor) and point
+`SARR_API_URL` at a running API.
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate   # once
+make install-mcp
+make run-api   # terminal 1
+
+# terminal 2 — blocks on stdio; wire Cursor to this process
+export SARR_API_URL=http://localhost:8080
+make run-mcp
+```
+
+| Tool | API | When to use |
+|---|---|---|
+| `search_packages` | `POST /v1/search` | Fast semantic lookup (`query`, `limit`, `rerank`) |
+| `recommend_packages` | `POST /v1/rag` | Grounded top-3 with citations; waits for SSE, returns one JSON blob |
+| `health` | `GET /healthz` | Check the API before searching |
+
+`recommend_packages` output shape (agents never see SSE tokens):
+
+```json
+{
+  "query": "async HTTP client",
+  "ranked": [{ "name": "httpx", "summary": "…", "score": 0.9, "stars": 12000 }],
+  "recommendations": [{ "package": "httpx", "reason": "…", "cited_snippet": "…" }],
+  "dropped": [],
+  "fast_path_ms": 420,
+  "llm_ms": 1050,
+  "error": null
+}
+```
+
+If Gemini fails, `error` is set and `ranked` is still populated — same contract
+as the demo UI. Citation guardrails stay on the API; MCP does not invent packages.
+
+**Cursor:** copy [`.cursor/mcp.json.example`](.cursor/mcp.json.example) → `.cursor/mcp.json`, reload MCP. Use `http://localhost:8080` for development, or the hosted `ApiUrl` for search and RAG (API Gateway may deliver RAG SSE in one block).
+
+```bash
+mcp dev src/sarr/mcp/server.py   # optional Inspector (pip install "mcp[cli]")
 ```
 
 ```bash
@@ -333,7 +384,9 @@ OpenAPI docs: `http://localhost:8080/docs`
 
 The demo UI has two independent checkboxes. **Rerank** sends `rerank` on `/v1/search` (or on `/v1/rag` when LLM is also on). **LLM** is the only control that calls `/v1/rag` and Gemini.
 
-`POST /v1/rag` streams Server-Sent Events. The ranked list is emitted first; generation uses Vertex Gemini (`GCP_PROJECT_ID` plus ADC locally, or a Secrets Manager service account on Lambda). API Gateway HTTP APIs do not stream well — run this path locally or on Cloud Run. The eval harness (precision@k, citation accuracy, faithfulness, cost) is a follow-on deliverable.
+**MCP** exposes the same endpoints as agent tools: `search_packages` → `/v1/search`, `recommend_packages` → `/v1/rag` (SSE consumed server-side), `health` → `/healthz`. See [MCP (agents / Cursor)](#mcp-agents--cursor) above.
+
+`POST /v1/rag` streams Server-Sent Events. The ranked list is emitted first; generation uses Vertex Gemini (`GCP_PROJECT_ID` plus ADC locally, or a Secrets Manager service account on Lambda). API Gateway HTTP APIs do not stream well — the MCP tool still works by waiting for the full SSE response. The eval harness (precision@k, citation accuracy, faithfulness, cost) is a follow-on deliverable.
 
 ---
 
