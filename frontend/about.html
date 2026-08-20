@@ -21,8 +21,8 @@
         <header class="header">
           <h1>How SARR finds packages</h1>
           <p class="tagline">
-            Embeddings, vector search, optional rerank, and an optional
-            Gemini top-3 grounded in retrieved package descriptions.
+            Embeddings, vector search, optional rerank, optional Gemini top-3,
+            and an MCP server so agents can search PyPI by meaning.
           </p>
         </header>
 
@@ -73,8 +73,8 @@
             <figcaption>
               Online serving (left) vs offline data prep (right). Colab embeds
               the corpus with PyTorch and upserts into Qdrant Cloud (~167k
-              points). The demo UI and CLI hit API Gateway → Lambda for each
-              search.
+              points). The demo UI, CLI, and MCP tools hit API Gateway → Lambda
+              for each search.
             </figcaption>
           </figure>
           <figure>
@@ -203,6 +203,8 @@
                   relevance is close</li>
                 <li>Optional Gemini top-3, cited from retrieved descriptions
                   only</li>
+                <li>MCP tools for agents (<code>search_packages</code>,
+                  <code>recommend_packages</code>)</li>
               </ul>
             </div>
           </div>
@@ -289,6 +291,47 @@
         </section>
 
         <section>
+          <h2>MCP for agents (what shipped)</h2>
+          <p>
+            <strong>Model Context Protocol</strong> lets coding agents (Cursor,
+            Claude Desktop, etc.) call SARR as tools instead of guessing PyPI
+            names. The MCP server is a thin local process — it does
+            <em>not</em> run on Lambda and does not load ONNX or Gemini. It
+            forwards HTTP to the same FastAPI app the UI uses.
+          </p>
+          <ol class="steps">
+            <li>
+              <strong>Install and start.</strong>
+              <code>make install-mcp</code>, then <code>make run-mcp</code>
+              (stdio). Set <code>SARR_API_URL</code> to
+              <code>http://localhost:8080</code> or the hosted API URL.
+            </li>
+            <li>
+              <strong><code>search_packages</code></strong> →
+              <code>POST /v1/search</code>. Cheap semantic lookup with
+              <code>query</code>, <code>limit</code>, and optional
+              <code>rerank</code>.
+            </li>
+            <li>
+              <strong><code>recommend_packages</code></strong> →
+              <code>POST /v1/rag</code>. The server reads the SSE stream
+              (<code>ranked_list</code>, then <code>llm_done</code> or
+              <code>llm_error</code>) and returns one JSON object — ranked hits,
+              grounded top-3, timings, and <code>error</code> if Gemini failed.
+            </li>
+            <li>
+              <strong><code>health</code></strong> → <code>GET /healthz</code>.
+            </li>
+          </ol>
+          <p>
+            Wire Cursor with <code>.cursor/mcp.json.example</code> (copy to
+            <code>.cursor/mcp.json</code>). Agents should only cite package
+            names returned by these tools; citation guardrails remain on the
+            API. See the repo README for the full tool schema and setup.
+          </p>
+        </section>
+
+        <section>
           <h2>Stack at a glance</h2>
           <ul>
             <li>BigQuery → sentence-transformers / PyTorch → Qdrant Cloud</li>
@@ -304,9 +347,10 @@
               Secrets Manager on Lambda
             </li>
             <li>
-              MCP stdio server (<code>python -m sarr.mcp.server</code>):
-              <code>search_packages</code>, <code>recommend_packages</code>
-              (RAG SSE → JSON), <code>health</code>
+              MCP stdio server (<code>make run-mcp</code> /
+              <code>python -m sarr.mcp.server</code>):
+              <code>search_packages</code>, <code>recommend_packages</code>,
+              <code>health</code> → HTTP API (local or hosted)
             </li>
             <li>Vite demo (Search, How it works, Contact)</li>
             <li>Automated unit tests and lint in CI</li>
