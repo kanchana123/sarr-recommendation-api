@@ -32,11 +32,61 @@ class Settings(BaseSettings):
         default="1970-01-01",
         description="Watermark for incremental ETL. Use epoch date for full load.",
     )
+    etl_min_description_length: int = Field(
+        default=25,
+        description="Min chars in summary or description (raises quality, shrinks corpus).",
+    )
+    etl_min_long_description_length: int = Field(
+        default=80,
+        description="Long-text bypass for popularity OR-gate (keeps well-documented packages).",
+    )
+    etl_active_within_days: int | None = Field(
+        default=2920,
+        description="Only packages with a release within this many days (~8 years).",
+    )
+    etl_require_libraries_io: bool = Field(
+        default=False,
+        description="If true, only PyPI projects known to Libraries.io (~168k).",
+    )
+    etl_require_any_popularity: bool = Field(
+        default=True,
+        description="Require stars/forks/sourcerank/dependents/long-description OR gate.",
+    )
+    etl_min_stars: int = Field(
+        default=1,
+        description="Popularity OR-gate: minimum GitHub stars (Libraries.io join).",
+    )
+    etl_min_forks: int = Field(
+        default=1,
+        description="Popularity OR-gate: minimum GitHub forks (Libraries.io join).",
+    )
+    etl_min_sourcerank: int = Field(
+        default=4,
+        description="Popularity OR-gate: minimum Libraries.io SourceRank.",
+    )
+    etl_min_dependent_projects: int = Field(
+        default=1,
+        description="Popularity OR-gate: minimum Libraries.io dependent project count.",
+    )
+    etl_max_packages: int | None = Field(
+        default=700_000,
+        description="Hard cap on indexed packages by popularity/recency (Qdrant sizing).",
+    )
 
     # Qdrant
     qdrant_url: str = "http://localhost:6333"
     qdrant_api_key: str | None = None
     qdrant_collection: str = "sarr_pypi"
+    qdrant_vectors_only: bool = Field(
+        default=True,
+        description="If true, upsert only vectors plus minimal {name} payload in Qdrant.",
+    )
+    search_metadata_over_fetch: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="ANN fetch multiplier before BigQuery hydrate + payload filters.",
+    )
 
     # Models (must match Colab ETL and Lambda)
     embedding_model: str = "BAAI/bge-small-en-v1.5"

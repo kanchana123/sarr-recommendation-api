@@ -15,11 +15,13 @@ def test_build_extract_sql_uses_pypi_by_default() -> None:
     settings = Settings(
         gcp_project_id="my-billing-project",
         etl_extract_source="pypi",
+        etl_max_packages=700_000,
     )
     sql = build_extract_sql(settings)
     assert "`bigquery-public-data.pypi.distribution_metadata`" in sql
     assert "bigquery-public-data.libraries_io.projects" in sql
     assert "upload_time > TIMESTAMP(@last_update_date)" in sql
+    assert "repository_forks_count" in sql
 
 
 @pytest.mark.unit
@@ -46,6 +48,27 @@ def test_build_count_sql_matches_extract_source() -> None:
 
 
 @pytest.mark.unit
+def test_build_pypi_sql_applies_corpus_filters() -> None:
+    settings = Settings(
+        gcp_project_id="x",
+        etl_extract_source="pypi",
+        etl_require_libraries_io=True,
+        etl_max_packages=650_000,
+        etl_min_description_length=40,
+        etl_active_within_days=1825,
+        etl_min_stars=1,
+        etl_min_forks=1,
+    )
+    sql = build_extract_sql(settings)
+    assert "INNER JOIN" in sql
+    assert "_etl_rank" in sql
+    assert "LENGTH(TRIM(p.description)) > 40" in sql
+    assert "INTERVAL 1825 DAY" in sql
+    assert "stars_count, 0) >= 1" in sql
+    assert "forks_count, 0) >= 1" in sql
+
+
+@pytest.mark.unit
 def test_row_to_package_maps_pypi_columns() -> None:
     package = row_to_package(
         {
@@ -61,12 +84,14 @@ def test_row_to_package_maps_pypi_columns() -> None:
             "classifiers": ["Development Status :: 5 - Production/Stable"],
             "latest_release_publish_timestamp": datetime(2024, 1, 15),
             "repository_stars_count": 52000,
+            "repository_forks_count": 9400,
             "keywords": "http, requests, client",
         }
     )
     assert package.name == "requests"
     assert package.summary == "Python HTTP for Humans."
     assert package.stars == 52000
+    assert package.forks == 9400
     assert package.license == "Apache-2.0"
     assert package.repo_url == "https://github.com/psf/requests"
     assert package.pypi_url == "https://pypi.org/project/requests/"

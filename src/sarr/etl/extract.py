@@ -1,6 +1,6 @@
 """BigQuery extract via google.cloud.bigquery.Client.
 
-Default source: PyPI public dataset (~800k+ projects, current metadata).
+Default source: PyPI public dataset with quality filters (~500k–700k target).
 Optional legacy source: Libraries.io (stale snapshot, ~168k PyPI rows).
 """
 
@@ -10,90 +10,12 @@ from collections.abc import Iterator
 from datetime import datetime
 from typing import Any, Literal
 
+from sarr.common.bq_packages import build_pypi_extract_sql
 from sarr.common.config import Settings, get_settings
 from sarr.common.schemas import PackageRecord
 from sarr.etl.watermark import parse_watermark
 
 ExtractSource = Literal["pypi", "libraries_io"]
-
-# Latest metadata row per PyPI project; optional Libraries.io join for stars / SourceRank.
-EXTRACT_SQL_PYPI = """
-WITH per_file AS (
-  SELECT
-    name,
-    version,
-    summary,
-    description,
-    license,
-    keywords,
-    classifiers,
-    requires_python,
-    requires_dist,
-    home_page,
-    project_urls,
-    upload_time,
-    ROW_NUMBER() OVER (
-      PARTITION BY name, version
-      ORDER BY upload_time DESC
-    ) AS file_rn
-  FROM `{pypi_project}.{pypi_dataset}.distribution_metadata`
-  WHERE upload_time IS NOT NULL
-),
-per_version AS (
-  SELECT * EXCEPT (file_rn)
-  FROM per_file
-  WHERE file_rn = 1
-),
-latest AS (
-  SELECT
-    *,
-    ROW_NUMBER() OVER (
-      PARTITION BY name
-      ORDER BY upload_time DESC, version DESC
-    ) AS pkg_rn
-  FROM per_version
-),
-packages AS (
-  SELECT * EXCEPT (pkg_rn)
-  FROM latest
-  WHERE pkg_rn = 1
-)
-SELECT
-  'Pypi' AS platform,
-  p.name,
-  COALESCE(
-    NULLIF(TRIM(p.description), ''),
-    NULLIF(TRIM(p.summary), '')
-  ) AS description,
-  p.summary,
-  p.keywords,
-  p.classifiers,
-  p.requires_python,
-  p.requires_dist AS dependencies,
-  p.license AS licenses,
-  p.home_page AS homepage_url,
-  p.project_urls,
-  p.upload_time AS latest_release_publish_timestamp,
-  CAST(COALESCE(li.sourcerank, 0) AS INT64) AS sourcerank,
-  CAST(COALESCE(li.dependent_projects_count, 0) AS INT64) AS dependent_projects_count,
-  CAST(COALESCE(li.versions_count, 0) AS INT64) AS versions_count,
-  CAST(COALESCE(li.dependent_repositories_count, 0) AS INT64) AS dependent_repositories_count,
-  li.language,
-  CAST(COALESCE(r.stars_count, 0) AS INT64) AS repository_stars_count,
-  COALESCE(li.keywords, '') AS libraries_io_keywords
-FROM packages AS p
-LEFT JOIN `{libraries_project}.{libraries_dataset}.projects` AS li
-  ON li.platform = 'Pypi'
-  AND LOWER(REPLACE(li.name, '_', '-')) = LOWER(REPLACE(p.name, '_', '-'))
-LEFT JOIN `{libraries_project}.{libraries_dataset}.repositories` AS r
-  ON li.repository_id = r.id
-WHERE (
-    (p.description IS NOT NULL AND TRIM(p.description) != '' AND LENGTH(TRIM(p.description)) > 5)
-    OR (p.summary IS NOT NULL AND TRIM(p.summary) != '' AND LENGTH(TRIM(p.summary)) > 5)
-  )
-  AND p.upload_time > TIMESTAMP(@last_update_date)
-ORDER BY p.upload_time ASC
-"""
 
 # Legacy Libraries.io-only extract (deprecated for full corpus).
 EXTRACT_SQL_LIBRARIES_IO = """
@@ -111,6 +33,7 @@ SELECT
   p.language,
   p.latest_release_publish_timestamp AS latest_release_publish_timestamp,
   CAST(COALESCE(r.stars_count, 0) AS INT64) AS repository_stars_count,
+  CAST(COALESCE(r.forks_count, 0) AS INT64) AS repository_forks_count,
   COALESCE(p.keywords, '') AS keywords
 FROM `{source_project}.{dataset}.projects` AS p
 LEFT JOIN `{source_project}.{dataset}.repositories` AS r
@@ -122,49 +45,6 @@ WHERE p.platform = 'Pypi'
   AND p.latest_release_publish_timestamp IS NOT NULL
   AND p.latest_release_publish_timestamp > TIMESTAMP(@last_update_date)
 ORDER BY p.latest_release_publish_timestamp ASC
-"""
-
-COUNT_SQL_PYPI = """
-WITH per_file AS (
-  SELECT
-    name,
-    version,
-    summary,
-    description,
-    upload_time,
-    ROW_NUMBER() OVER (
-      PARTITION BY name, version
-      ORDER BY upload_time DESC
-    ) AS file_rn
-  FROM `{pypi_project}.{pypi_dataset}.distribution_metadata`
-  WHERE upload_time IS NOT NULL
-),
-per_version AS (
-  SELECT * EXCEPT (file_rn)
-  FROM per_file
-  WHERE file_rn = 1
-),
-latest AS (
-  SELECT
-    *,
-    ROW_NUMBER() OVER (
-      PARTITION BY name
-      ORDER BY upload_time DESC, version DESC
-    ) AS pkg_rn
-  FROM per_version
-),
-packages AS (
-  SELECT * EXCEPT (pkg_rn)
-  FROM latest
-  WHERE pkg_rn = 1
-)
-SELECT COUNT(*) AS n
-FROM packages AS p
-WHERE (
-    (p.description IS NOT NULL AND TRIM(p.description) != '' AND LENGTH(TRIM(p.description)) > 5)
-    OR (p.summary IS NOT NULL AND TRIM(p.summary) != '' AND LENGTH(TRIM(p.summary)) > 5)
-  )
-  AND p.upload_time > TIMESTAMP(@last_update_date)
 """
 
 COUNT_SQL_LIBRARIES_IO = """
@@ -192,12 +72,7 @@ def _extract_source(settings: Settings) -> ExtractSource:
 def build_extract_sql(settings: Settings) -> str:
     source = _extract_source(settings)
     if source == "pypi":
-        return EXTRACT_SQL_PYPI.format(
-            pypi_project=settings.bq_pypi_project,
-            pypi_dataset=settings.bq_pypi_dataset,
-            libraries_project=settings.bq_libraries_project,
-            libraries_dataset=settings.bq_libraries_dataset,
-        )
+        return build_pypi_extract_sql(settings, for_count=False)
     return EXTRACT_SQL_LIBRARIES_IO.format(
         source_project=settings.bq_source_project,
         dataset=settings.bq_dataset,
@@ -207,14 +82,24 @@ def build_extract_sql(settings: Settings) -> str:
 def build_count_sql(settings: Settings) -> str:
     source = _extract_source(settings)
     if source == "pypi":
-        return COUNT_SQL_PYPI.format(
-            pypi_project=settings.bq_pypi_project,
-            pypi_dataset=settings.bq_pypi_dataset,
-        )
+        return build_pypi_extract_sql(settings, for_count=True)
     return COUNT_SQL_LIBRARIES_IO.format(
         source_project=settings.bq_source_project,
         dataset=settings.bq_dataset,
     )
+
+
+def _extract_query_parameters(settings: Settings, watermark: str) -> list[Any]:
+    from google.cloud.bigquery import ScalarQueryParameter
+
+    params: list[Any] = [
+        ScalarQueryParameter("last_update_date", "STRING", watermark),
+    ]
+    if _extract_source(settings) == "pypi" and settings.etl_max_packages:
+        params.append(
+            ScalarQueryParameter("max_packages", "INT64", int(settings.etl_max_packages))
+        )
+    return params
 
 
 def _as_list(value: Any) -> list[str]:
@@ -292,7 +177,7 @@ def row_to_package(row: dict[str, Any]) -> PackageRecord:
         dependencies=_as_list(row.get("dependencies") or row.get("requires_dist")),
         classifiers=_as_list(row.get("classifiers")),
         stars=int(row.get("repository_stars_count") or row.get("stars") or 0),
-        forks=int(row.get("forks") or 0),
+        forks=int(row.get("repository_forks_count") or row.get("forks") or 0),
         downloads_30d=row.get("downloads_30d"),
         last_commit=row.get("last_commit"),
         latest_release=release_ts,
@@ -330,7 +215,7 @@ def extract_packages(
     client: Any | None = None,
 ) -> Iterator[PackageRecord]:
     """Stream PyPI packages updated after the watermark."""
-    from google.cloud.bigquery import QueryJobConfig, ScalarQueryParameter
+    from google.cloud.bigquery import QueryJobConfig
 
     cfg = settings or get_settings()
     watermark = parse_watermark(last_update_date or cfg.last_update_date)
@@ -338,17 +223,21 @@ def extract_packages(
     bq_client = client or get_bigquery_client(cfg)
     source = _extract_source(cfg)
 
-    job_config = QueryJobConfig(
-        query_parameters=[
-            ScalarQueryParameter("last_update_date", "STRING", watermark),
-        ]
-    )
+    job_config = QueryJobConfig(query_parameters=_extract_query_parameters(cfg, watermark))
 
     print(f"[extract] source={source} watermark={watermark}")
     if source == "pypi":
         print(
             f"[extract] SQL primary={cfg.bq_pypi_project}.{cfg.bq_pypi_dataset}"
             f".distribution_metadata"
+        )
+        print(
+            f"[extract] filters min_desc_len={cfg.etl_min_description_length} "
+            f"long_desc_len={cfg.etl_min_long_description_length} "
+            f"active_within_days={cfg.etl_active_within_days} "
+            f"any_popularity={cfg.etl_require_any_popularity} "
+            f"min_stars={cfg.etl_min_stars} min_forks={cfg.etl_min_forks} "
+            f"max_packages={cfg.etl_max_packages}"
         )
     else:
         print(f"[extract] SQL source={cfg.bq_source_project}.{cfg.bq_dataset}.projects")
@@ -369,16 +258,12 @@ def count_extract_rows(
     client: Any | None = None,
 ) -> int:
     """Count rows the ETL would process (cheap diagnostic)."""
-    from google.cloud.bigquery import QueryJobConfig, ScalarQueryParameter
+    from google.cloud.bigquery import QueryJobConfig
 
     cfg = settings or get_settings()
     watermark = parse_watermark(last_update_date or cfg.last_update_date)
     sql = build_count_sql(cfg)
     bq_client = client or get_bigquery_client(cfg)
-    job_config = QueryJobConfig(
-        query_parameters=[
-            ScalarQueryParameter("last_update_date", "STRING", watermark),
-        ]
-    )
+    job_config = QueryJobConfig(query_parameters=_extract_query_parameters(cfg, watermark))
     rows = list(bq_client.query(sql, job_config=job_config))
     return int(rows[0]["n"]) if rows else 0

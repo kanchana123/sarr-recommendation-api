@@ -28,9 +28,10 @@ class FakeLoader:
         self,
         ids: Sequence[str],
         vectors: Sequence[Sequence[float]],
-        payloads: Sequence[dict[str, Any]],
+        payloads: Sequence[dict[str, Any]] | None = None,
     ) -> None:
-        self.batches.append((list(ids), [list(v) for v in vectors], list(payloads)))
+        stored = list(payloads) if payloads is not None else []
+        self.batches.append((list(ids), [list(v) for v in vectors], stored))
 
 
 @pytest.mark.unit

@@ -1,4 +1,4 @@
-"""Orchestrates query embed → ANN → optional rerank → score blend."""
+"""Orchestrates query embed → ANN → BigQuery hydrate → optional rerank → score blend."""
 
 from __future__ import annotations
 
@@ -7,11 +7,12 @@ import time
 from typing import Any
 
 from sarr.api.embedder import QueryEmbedder
+from sarr.api.metadata_store import PackageMetadataStore
 from sarr.api.ranking import blend_scores
 from sarr.api.reranker import Reranker
 from sarr.api.vector_store import VectorStore
 from sarr.common.config import Settings, get_settings
-from sarr.common.schemas import SearchHit, SearchRequest, SearchResponse
+from sarr.common.schemas import SearchFilters, SearchHit, SearchRequest, SearchResponse
 
 logger = logging.getLogger("sarr.api")
 
@@ -23,6 +24,7 @@ class SearchService:
         embedder: QueryEmbedder | None = None,
         vector_store: VectorStore | None = None,
         reranker: Reranker | None = None,
+        metadata_store: PackageMetadataStore | None = None,
         *,
         warm: bool = True,
     ) -> None:
@@ -30,6 +32,7 @@ class SearchService:
         self.embedder = embedder or QueryEmbedder(self.settings.embedding_model)
         self.vector_store = vector_store or VectorStore(self.settings)
         self.reranker = reranker or Reranker(self.settings.reranker_model)
+        self.metadata_store = metadata_store or PackageMetadataStore(self.settings)
         if warm and embedder is None:
             started = time.perf_counter()
             self.embedder.embed("warmup")
@@ -61,15 +64,26 @@ class SearchService:
         query_vector = self.embedder.embed(request.query)
         timing_ms["embed_ms"] = round((time.perf_counter() - t0) * 1000.0, 1)
 
+        ann_limit = max(fetch_k, limit) * self.settings.search_metadata_over_fetch
         t1 = time.perf_counter()
         raw_hits = self.vector_store.search(
             query_vector,
-            limit=max(fetch_k, limit),
-            query_filter=self._build_filter(request),
+            limit=ann_limit,
+            query_filter=None if self.settings.qdrant_vectors_only else self._build_filter(request),
         )
         timing_ms["qdrant_ms"] = round((time.perf_counter() - t1) * 1000.0, 1)
 
-        candidates = raw_hits[:rerank_keep] if rerank else raw_hits
+        t_hydrate = time.perf_counter()
+        hydrated = self._hydrate_hits(raw_hits)
+        timing_ms["bq_ms"] = round((time.perf_counter() - t_hydrate) * 1000.0, 1)
+
+        filtered = [
+            hit
+            for hit in hydrated
+            if self._passes_filters(hit["payload"], request.filters)
+        ]
+        pool = filtered[: max(fetch_k, rerank_keep if rerank else fetch_k)]
+        candidates = pool[:rerank_keep] if rerank else pool[: max(fetch_k, limit)]
         relevance_scores = [hit["score"] for hit in candidates]
 
         if rerank and candidates:
@@ -84,7 +98,6 @@ class SearchService:
                 timing_ms["rerank_ms"] = 0.0
             else:
                 timing_ms["rerank_ms"] = round((time.perf_counter() - t2) * 1000.0, 1)
-                # Min-max normalize reranker scores into 0..1 for blending
                 lo, hi = min(relevance_scores), max(relevance_scores)
                 if hi > lo:
                     relevance_scores = [(s - lo) / (hi - lo) for s in relevance_scores]
@@ -116,6 +129,58 @@ class SearchService:
             results=results,
             timing_ms=timing_ms,
         )
+
+    def _hydrate_hits(self, hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not hits:
+            return []
+        if not self.settings.qdrant_vectors_only:
+            return hits
+
+        names: list[str] = []
+        for hit in hits:
+            name = self._hit_name(hit)
+            if name:
+                names.append(name)
+        unique_names = list(dict.fromkeys(names))
+        try:
+            payloads = self.metadata_store.fetch_by_names(unique_names)
+        except Exception:
+            logger.exception("BigQuery metadata hydrate failed; returning vector-only hits")
+            return hits
+
+        hydrated: list[dict[str, Any]] = []
+        for hit in hits:
+            name = self._hit_name(hit)
+            payload = payloads.get(name or "")
+            if not payload:
+                continue
+            hydrated.append({**hit, "payload": payload})
+        return hydrated
+
+    @staticmethod
+    def _hit_name(hit: dict[str, Any]) -> str | None:
+        payload = hit.get("payload") or {}
+        name = payload.get("name")
+        if isinstance(name, str) and name.strip():
+            return name.strip().lower().replace("_", "-")
+        return None
+
+    @staticmethod
+    def _passes_filters(payload: dict[str, Any], filters: SearchFilters | None) -> bool:
+        if not filters:
+            return True
+        if filters.min_stars is not None:
+            if int(payload.get("stars") or 0) < filters.min_stars:
+                return False
+        if filters.license:
+            license_value = str(payload.get("license") or "")
+            if filters.license.lower() not in license_value.lower():
+                return False
+        if filters.requires_python:
+            req = str(payload.get("requires_python") or "")
+            if filters.requires_python not in req:
+                return False
+        return True
 
     def _build_filter(self, request: SearchRequest) -> dict[str, Any] | None:
         if not request.filters:

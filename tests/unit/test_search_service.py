@@ -20,25 +20,12 @@ class FakeStore:
             {
                 "id": "requests",
                 "score": 0.91,
-                "payload": {
-                    "name": "requests",
-                    "summary": "HTTP for Humans",
-                    "stars": 52000,
-                    "forks": 100,
-                    "last_commit": "2024-01-01T00:00:00+00:00",
-                    "pypi_url": "https://pypi.org/project/requests/",
-                },
+                "payload": {"name": "requests"},
             },
             {
                 "id": "httpx",
                 "score": 0.88,
-                "payload": {
-                    "name": "httpx",
-                    "summary": "HTTP client",
-                    "stars": 12000,
-                    "forks": 50,
-                    "last_commit": "2024-06-01T00:00:00+00:00",
-                },
+                "payload": {"name": "httpx"},
             },
         ][:limit]
 
@@ -49,13 +36,34 @@ class FakeReranker:
         return [0.1, 0.9][: len(documents)]
 
 
+class FakeMetadataStore:
+    def fetch_by_names(self, names: list[str]):
+        return {
+            name: {
+                "name": name,
+                "summary": "HTTP for Humans" if name == "requests" else "HTTP client",
+                "stars": 52000 if name == "requests" else 12000,
+                "forks": 100 if name == "requests" else 50,
+                "last_commit": "2024-01-01T00:00:00+00:00",
+                "pypi_url": f"https://pypi.org/project/{name}/",
+            }
+            for name in names
+        }
+
+
 @pytest.mark.unit
 def test_search_without_rerank_returns_hits() -> None:
     service = SearchService(
-        settings=Settings(rerank_enabled_default=False, search_top_k=10, rerank_top_k=10),
+        settings=Settings(
+            rerank_enabled_default=False,
+            search_top_k=10,
+            rerank_top_k=10,
+            qdrant_vectors_only=True,
+        ),
         embedder=FakeEmbedder(),  # type: ignore[arg-type]
         vector_store=FakeStore(),  # type: ignore[arg-type]
         reranker=FakeReranker(),  # type: ignore[arg-type]
+        metadata_store=FakeMetadataStore(),  # type: ignore[arg-type]
         warm=False,
     )
     response = service.search(SearchRequest(query="http client", limit=2, rerank=False))
@@ -65,15 +73,22 @@ def test_search_without_rerank_returns_hits() -> None:
     assert response.timing_ms is not None
     assert "embed_ms" in response.timing_ms
     assert "qdrant_ms" in response.timing_ms
+    assert "bq_ms" in response.timing_ms
 
 
 @pytest.mark.unit
 def test_search_with_rerank_reorders() -> None:
     service = SearchService(
-        settings=Settings(rerank_enabled_default=False, search_top_k=10, rerank_top_k=10),
+        settings=Settings(
+            rerank_enabled_default=False,
+            search_top_k=10,
+            rerank_top_k=10,
+            qdrant_vectors_only=True,
+        ),
         embedder=FakeEmbedder(),  # type: ignore[arg-type]
         vector_store=FakeStore(),  # type: ignore[arg-type]
         reranker=FakeReranker(),  # type: ignore[arg-type]
+        metadata_store=FakeMetadataStore(),  # type: ignore[arg-type]
         warm=False,
     )
     response = service.search(SearchRequest(query="http client", limit=2, rerank=True))
