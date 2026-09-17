@@ -15,8 +15,16 @@ class Settings(BaseSettings):
 
     # BigQuery / ETL
     # gcp_project_id = YOUR project (billing/quota for the query job).
-    # Default source = Libraries.io public dataset (PyPI + repo stars).
+    # Default extract = PyPI distribution_metadata (~800k+ projects, current).
     gcp_project_id: str = ""
+    etl_extract_source: str = Field(
+        default="pypi",
+        description="BigQuery extract: 'pypi' (full corpus) or 'libraries_io' (legacy ~168k).",
+    )
+    bq_pypi_project: str = "bigquery-public-data"
+    bq_pypi_dataset: str = "pypi"
+    bq_libraries_project: str = "bigquery-public-data"
+    bq_libraries_dataset: str = "libraries_io"
     bq_source_project: str = "bigquery-public-data"
     bq_dataset: str = "libraries_io"
     bq_table: str = "projects"
