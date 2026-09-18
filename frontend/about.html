@@ -21,8 +21,9 @@
         <header class="header">
           <h1>How SARR finds packages</h1>
           <p class="tagline">
-            Embeddings, vector search, optional rerank, optional Gemini top-3,
-            and an MCP server so agents can search PyPI by meaning.
+            ~700k PyPI packages by meaning — vector search in Qdrant, metadata
+            from BigQuery, optional rerank, a <strong>top-10</strong> ranked list
+            on every search, optional Gemini top-3, plus MCP tools for agents.
           </p>
         </header>
 
@@ -38,57 +39,75 @@
           <p>
             <strong>SARR</strong> (Semantic Artifacts Retrieval and Ranking)
             indexes PyPI packages as semantic documents and returns a ranked
-            list for natural-language queries. The live demo covers
-            <strong>167,619</strong> packages from public Libraries.io
-            metadata joined with repository signals. That dump is an MVP
-            corpus — the newest release timestamp in this slice is from
-            <strong>December 2018</strong> — so ranking features are strong,
-            while freshness is a known next step.
+            list for natural-language queries. The live index covers about
+            <strong>700,000</strong> packages — filtered from current
+            <strong>PyPI BigQuery</strong> metadata with quality and popularity
+            gates — not the full ~1M unfiltered catalog.
           </p>
         </section>
 
         <section>
           <h2>System design</h2>
           <p>
-            Indexing is a rare GPU job (Colab, <strong>PyTorch</strong>). Serving
-            only embeds the query, retrieves neighbors from Qdrant, optionally
-            reranks, and blends in adoption and recency. If you check
-            <em>LLM</em>, a second path asks Vertex Gemini for a grounded
-            top-3 from those retrieved packages only. On Lambda both the
-            bi-encoder and the cross-encoder run as <strong>ONNX</strong> — no
-            PyTorch import on the request path. Both paths share the same
-            <code>BAAI/bge-small-en-v1.5</code> checkpoint and document format.
+            Indexing is a rare GPU job (Colab, <strong>PyTorch</strong>).
+            Serving embeds the query, runs ANN in Qdrant on
+            <strong>vectors only</strong>, loads rich metadata from
+            <strong>BigQuery</strong>, optionally reranks, then blends adoption
+            and recency. If you check <em>LLM</em>, Vertex Gemini writes a
+            grounded top-3 from those retrieved packages only. On Lambda the
+            bi-encoder and cross-encoder run as <strong>ONNX</strong>. Both
+            paths share <code>BAAI/bge-small-en-v1.5</code> and the same
+            document format.
           </p>
-          <p class="tagline">
-            Diagrams live in <code>frontend/public/diagrams/</code>. Replace
-            <code>architecture.png</code> and <code>search-sequence.png</code>
-            to update this page and the README.
-          </p>
+
+          <div class="flow-diagram" role="img" aria-label="Offline and online architecture">
+            <div class="lane-title">Offline (Colab GPU)</div>
+            <div class="row">
+              <span class="box">PyPI BigQuery extract</span>
+              <span class="arrow">→</span>
+              <span class="box">Filter · build document</span>
+              <span class="arrow">→</span>
+              <span class="box">PyTorch embed</span>
+              <span class="arrow">→</span>
+              <span class="box">Qdrant (~700k vectors + name)</span>
+            </div>
+            <div class="lane-title">Online (Lambda / local API)</div>
+            <div class="row">
+              <span class="box">UI · CLI · MCP</span>
+              <span class="arrow">→</span>
+              <span class="box">API Gateway</span>
+              <span class="arrow">→</span>
+              <span class="box">ONNX query embed</span>
+              <span class="arrow">→</span>
+              <span class="box">Qdrant ANN</span>
+              <span class="arrow">→</span>
+              <span class="box">BigQuery metadata</span>
+              <span class="arrow">→</span>
+              <span class="box">Rerank · blend</span>
+            </div>
+          </div>
+
           <figure>
             <img
               class="diagram"
               src="./diagrams/architecture.png"
-              alt="Architecture: GitHub Pages and CLI call API Gateway and Lambda; Colab ETL upserts into Qdrant Cloud"
+              alt="Architecture overview: clients, API Gateway, Lambda, Qdrant, BigQuery, and Colab ETL"
             />
             <figcaption>
-              Online serving (left) vs offline data prep (right). Colab embeds
-              the corpus with PyTorch and upserts into Qdrant Cloud (~167k
-              points). The demo UI, CLI, and MCP tools hit API Gateway → Lambda
-              for each search.
+              High-level topology. PNG mirrors the README mermaid diagrams;
+              replace <code>frontend/public/diagrams/architecture.png</code> when
+              the deploy layout changes.
             </figcaption>
           </figure>
           <figure>
             <img
               class="diagram"
               src="./diagrams/search-sequence.png"
-              alt="Sequence diagram of ONNX query embed, Qdrant ANN, optional ONNX rerank, score blend, and JSON with took_ms"
+              alt="Search sequence: embed, Qdrant, BigQuery hydrate, rerank, blend"
             />
             <figcaption>
-              Per request: ONNX query embed (384-d), ANN cosine top-k in Qdrant,
-              optional ONNX cross-encoder when <code>rerank=true</code>, then
-              <code>0.75·relevance + 0.15·popularity + 0.10·recency</code>.
-              Checking <em>LLM</em> adds a second fork: those ranked hits stream
-              first, then Vertex Gemini writes a citation-checked top-3.
+              Per-request search path. Metadata is never read from Qdrant
+              payloads during ranking — only from BigQuery after ANN retrieval.
             </figcaption>
           </figure>
         </section>
@@ -97,90 +116,96 @@
           <h2>End-to-end path</h2>
           <ol class="steps">
             <li>
-              <strong>Index offline.</strong> A GPU batch job pulls PyPI rows
-              from BigQuery, builds a structured text document per package,
-              embeds it with a PyTorch bi-encoder, and upserts vectors plus
-              metadata into Qdrant. Runs are watermarked so a disconnect can
-              resume without duplicating points.
+              <strong>Index offline.</strong> BigQuery pulls filtered PyPI
+              metadata (recency, description length, stars/forks/SourceRank or
+              long descriptions). Each package becomes a structured document,
+              embedded with PyTorch, and upserted to Qdrant as
+              <strong>vector + package name</strong> — not full metadata in the
+              vector store. Watermark checkpoints resume long Colab runs.
             </li>
             <li>
-              <strong>Encode the query online.</strong> The same embedding
-              checkpoint used at index time maps your search string into the
-              same 384-d space. Hosted Lambda runs a baked ONNX graph; local
-              dev can still use sentence-transformers when no ONNX files are
-              present.
+              <strong>Encode the query online.</strong> The same bi-encoder
+              checkpoint maps your search string into 384-d space (ONNX on
+              Lambda).
             </li>
             <li>
-              <strong>Retrieve neighbors.</strong> Approximate nearest-neighbor
-              search returns the closest packages by cosine similarity over the
-              full collection.
+              <strong>Retrieve neighbors.</strong> Cosine ANN over ~700k
+              vectors returns the closest packages by embedding similarity.
             </li>
             <li>
-              <strong>Refine when needed.</strong> If you check <em>Rerank</em>,
-              the UI sends <code>rerank: true</code> and an ONNX MiniLM
-              cross-encoder rescores the short top‑k list. No PyTorch import
-              on Lambda. This checkbox does not call Gemini.
+              <strong>Hydrate metadata.</strong> The API batch-fetches summaries,
+              stars, forks, URLs, and release dates from BigQuery for those
+              names. Filters (e.g. min stars) apply here, not in Qdrant.
             </li>
             <li>
-              <strong>Blend for usefulness.</strong> The final score mixes
-              semantic relevance with adoption (stars, dependents, SourceRank)
-              and release recency. Popularity stays in structured payload fields
-              so it influences rank without polluting the embedding text.
+              <strong>Rerank when needed.</strong> With <em>Rerank</em> checked,
+              an ONNX cross-encoder rescores the top‑k using BigQuery
+              descriptions — after hydration, not from Qdrant payloads.
             </li>
             <li>
-              <strong>Grounded recommendations (optional).</strong> If you check
-              <em>LLM</em>, the UI calls <code>POST /v1/rag</code>. Gemini
-              writes a top-3 from the retrieved names and descriptions only.
-              Packages not in that set are dropped. If generation fails, the
-              ranked list is still the result. Leave LLM unchecked for search
-              without an LLM call.
+              <strong>Blend for usefulness.</strong> Final score mixes semantic
+              relevance with adoption (stars, dependents, SourceRank) and
+              release recency from BigQuery fields.
+            </li>
+            <li>
+              <strong>Return top 10 to the UI.</strong> Classic search uses
+              <code>POST /v1/search</code> with <code>limit=10</code>. The Search
+              page renders all ten hits (score, summary, stars/forks when
+              Libraries.io has them).
+            </li>
+            <li>
+              <strong>Grounded recommendations (optional).</strong> With
+              <em>LLM</em>, <code>POST /v1/rag</code> streams the same
+              <strong>top 10</strong> as <code>ranked_list</code>, then Gemini
+              top-3 cited from those descriptions only.
             </li>
           </ol>
         </section>
 
         <section>
+          <h2>What you see on Search</h2>
+          <ul>
+            <li>
+              <strong>Ranked list (always up to 10).</strong> Semantic retrieval
+              over ~700k vectors, BigQuery hydrate, optional rerank, then blend.
+              Without <em>LLM</em>, this is the full answer.
+            </li>
+            <li>
+              <strong>Gemini block (optional).</strong> With <em>LLM</em>, three
+              grounded picks appear below the ten cards. If generation fails, the
+              ranked ten still stand.
+            </li>
+          </ul>
+        </section>
+
+        <section>
           <h2>Grounded RAG (what shipped)</h2>
           <p>
-            Search and generation are separate. Classic search still uses
-            <code>POST /v1/search</code>. Checking <em>LLM</em> on the demo
-            calls <code>POST /v1/rag</code> and streams Server-Sent Events.
-            Checking <em>Rerank</em> only runs the ONNX cross-encoder; it
-            does not call Gemini.
+            Search and generation are separate. Classic search uses
+            <code>POST /v1/search</code>. Checking <em>LLM</em> calls
+            <code>POST /v1/rag</code> (SSE). <em>Rerank</em> only runs the
+            cross-encoder; it does not call Gemini.
           </p>
           <ol class="steps">
+            <li>Retrieve 50 neighbors (Qdrant) and hydrate from BigQuery.</li>
             <li>
-              Retrieve 50 neighbors from Qdrant (same bi-encoder as search).
+              Optional MiniLM rerank on hydrated text; blend and keep the
+              <strong>top 10</strong> (<code>RAG_CONTEXT_K=10</code>) for the
+              UI and Gemini context.
             </li>
             <li>
-              If <em>Rerank</em> is on, the MiniLM cross-encoder scores those
-              50; otherwise ranking uses cosine plus the popularity/recency
-              blend. The API keeps the top 8 for the prompt.
+              Emit <code>ranked_list</code> with those 10 hits first (complete if
+              Gemini fails).
             </li>
             <li>
-              Emit <code>ranked_list</code> immediately. That list is a
-              complete result if Gemini is slow or fails.
+              Vertex Gemini sees only name + description for those ten; returns
+              three cited picks.
             </li>
             <li>
-              Vertex Gemini (<code>gemini-2.5-flash-lite</code>, fallback
-              <code>gemini-2.5-flash</code>) sees only package name and
-              description. It returns JSON with exactly three
-              <code>package</code>, <code>reason</code>, and
-              <code>cited_snippet</code> fields.
-            </li>
-            <li>
-              The backend drops any <code>package</code> not in the eight
-              retrieved names, then emits <code>llm_done</code> (or
-              <code>llm_error</code>). The UI marks a Gemini icon on that
-              block so generated text is distinct from ranked hits.
+              Backend drops hallucinated package names; UI marks LLM output
+              separately from the ten ranked cards.
             </li>
           </ol>
-          <p>
-            Generation needs <code>GCP_PROJECT_ID</code> and Vertex billing.
-            API Gateway HTTP APIs do not stream SSE well, so this path is
-            meant for local FastAPI or Cloud Run. A labeled eval set
-            (precision@k, citation accuracy, faithfulness) is still future
-            work — not part of the serving stack above.
-          </p>
         </section>
 
         <section>
@@ -197,163 +222,67 @@
             <div>
               <h3>SARR</h3>
               <ul>
+                <li>~700k filtered PyPI corpus (vectors-only in Qdrant)</li>
                 <li>Matches intent in embedding space</li>
                 <li>Handles descriptive queries without exact lexical overlap</li>
-                <li>Surfaces better-maintained, more adopted options when
-                  relevance is close</li>
-                <li>Optional Gemini top-3, cited from retrieved descriptions
-                  only</li>
-                <li>MCP tools for agents (<code>search_packages</code>,
-                  <code>recommend_packages</code>)</li>
+                <li>Top-10 ranked list; adoption/recency from BigQuery when available</li>
+                <li>Optional Gemini top-3 from the retrieved ten only</li>
+                <li>MCP tools for agents</li>
               </ul>
             </div>
           </div>
-          <p>
-            Try <em>“text to speech”</em> or <em>“async HTTP client with
-            retries”</em> on the search page. PyPI.org often ranks packages
-            whose <em>names</em> contain the query words (including mismatched
-            descriptions). SARR can surface a widely used library such as
-            <code>google-cloud-texttospeech</code> even when the name is not a
-            literal copy of the query — and can also over-retrieve near-misses
-            such as speech-to-text vs text-to-speech.
-          </p>
         </section>
 
         <section>
           <h2>Models and systems choices</h2>
           <p>
-            The MVP uses a compact bi-encoder
-            (<code>BAAI/bge-small-en-v1.5</code>, 384 dimensions) so indexing
-            ~168k documents on a Colab T4 stays practical. ETL embeds the
-            corpus with PyTorch / sentence-transformers. The Lambda image
-            exports those weights to ONNX at build time so query embedding on
-            CPU stays well under API Gateway’s 30s client wait. Reranking uses
-            <code>cross-encoder/ms-marco-MiniLM-L-6-v2</code> as ONNX on the
-            retrieved shortlist rather than scoring the whole corpus — cheap
-            recall, then selective precision.
-          </p>
-          <p>
-            Serving keeps the heavy lift out of the request path: corpus
-            embeddings are precomputed. Each hosted search request only runs
-            small ONNX graphs for the query (and the cross-encoder when
-            rerank is on), hits Qdrant, and blends scores. Gemini runs only
-            when the caller uses <code>/v1/rag</code> (the demo
-            <em>LLM</em> checkbox). The same FastAPI app runs locally
-            (sentence-transformers when no ONNX graph is present) and on
-            Lambda (ONNX Runtime, no PyTorch), with shared schemas and
-            document formatting between ETL and search.
+            <code>BAAI/bge-small-en-v1.5</code> (384-d) keeps indexing ~700k
+            documents feasible on a Colab T4. Splitting metadata to BigQuery
+            keeps Qdrant lean (vectors + name) while still reranking on fresh
+            summaries. Popularity signals come from a Libraries.io join at ETL
+            and query time.
           </p>
         </section>
 
         <section>
-          <h2>What “fast enough” looks like today</h2>
+          <h2>What “fast enough” looks like</h2>
           <p>
-            Quote server <code>took_ms</code> for serving quality. Quote client
-            RTT plus location for what a browser feels. Cold start is separate
-            — do not fold it into p50 / p95 / p99.
+            Quote server <code>took_ms</code> and <code>timing_ms</code>
+            (<code>embed_ms</code>, <code>qdrant_ms</code>, <code>bq_ms</code>,
+            <code>rerank_ms</code>). Latency below will be remeasured after the
+            700k corpus and BigQuery hydrate path are live in production.
           </p>
           <ul>
-            <li>
-              Full corpus load: <strong>167,619</strong> packages (PyTorch
-              embed + Qdrant upsert on a Colab T4).
-            </li>
-            <li>
-              Cold Lambda: about <strong>5 s</strong> without rerank, about
-              <strong>16 s</strong> with rerank (loads ONNX sessions).
-            </li>
-            <li>
-              Warm, <code>rerank=false</code>: server p50 <strong>18 ms</strong>,
-              p95 <strong>65 ms</strong>, p99 <strong>67 ms</strong>. Warm,
-              <code>rerank=true</code>: p50 <strong>172 ms</strong>, p95
-              <strong>257 ms</strong> (~154 ms extra for the cross-encoder;
-              client p50 ~271 ms from this region).
-            </li>
-            <li>
-              Local RAG (warm, LLM + rerank on): ranked list
-              <strong>472 ms</strong>, Gemini top-3 <strong>1.05 s</strong>
-              (<code>llm_ms</code>) for <em>async HTTP client</em>.
-            </li>
-            <li>
-              Hosted RAG (warm, LLM + rerank on Lambda): ranked list
-              <strong>~350–520 ms</strong> server <code>took_ms</code>, Gemini
-              <strong>~650 ms–1.2 s</strong> (<code>llm_ms</code>). API Gateway
-              may deliver SSE in one block rather than streaming incrementally.
-            </li>
+            <li>Indexed corpus: <strong>~700,000</strong> packages (vectors in Qdrant)</li>
+            <li>Cold Lambda, <code>rerank=false</code>: <strong>TBD</strong></li>
+            <li>Cold Lambda, <code>rerank=true</code>: <strong>TBD</strong></li>
+            <li>Warm search, <code>rerank=false</code>: p50 / p95 / p99 <strong>TBD</strong></li>
+            <li>Warm search, <code>rerank=true</code>: p50 / p95 / p99 <strong>TBD</strong></li>
+            <li>Hosted RAG (warm, LLM + rerank): ranked <strong>TBD</strong>, Gemini <strong>TBD</strong></li>
           </ul>
           <p>
-            To reproduce search latency:
+            Reproduce when deployed:
             <code>python3 scripts/measure_latency.py --url $SARR_API_URL --n 50</code>
-            (20 Aug 2026: 1 warmup + 50 sequential mixed queries on the live
-            API). For rerank, warm up once then add
-            <code>--rerank --skip-warmup</code>. Compare <code>took_ms</code>
-            (server) with curl’s total time (client).
+            and <code>--rerank --skip-warmup</code> after a warmup request.
           </p>
         </section>
 
         <section>
           <h2>MCP for agents (what shipped)</h2>
           <p>
-            <strong>Model Context Protocol</strong> lets coding agents (Cursor,
-            Claude Desktop, etc.) call SARR as tools instead of guessing PyPI
-            names. The MCP server is a thin local process — it does
-            <em>not</em> run on Lambda and does not load ONNX or Gemini. It
-            forwards HTTP to the same FastAPI app the UI uses.
-          </p>
-          <ol class="steps">
-            <li>
-              <strong>Install and start.</strong>
-              <code>make install-mcp</code>, then <code>make run-mcp</code>
-              (stdio). Set <code>SARR_API_URL</code> to
-              <code>http://localhost:8080</code> or the hosted API URL.
-            </li>
-            <li>
-              <strong><code>search_packages</code></strong> →
-              <code>POST /v1/search</code>. Cheap semantic lookup with
-              <code>query</code>, <code>limit</code>, and optional
-              <code>rerank</code>.
-            </li>
-            <li>
-              <strong><code>recommend_packages</code></strong> →
-              <code>POST /v1/rag</code>. The server reads the SSE stream
-              (<code>ranked_list</code>, then <code>llm_done</code> or
-              <code>llm_error</code>) and returns one JSON object — ranked hits,
-              grounded top-3, timings, and <code>error</code> if Gemini failed.
-            </li>
-            <li>
-              <strong><code>health</code></strong> → <code>GET /healthz</code>.
-            </li>
-          </ol>
-          <p>
-            Wire Cursor with <code>.cursor/mcp.json.example</code> (copy to
-            <code>.cursor/mcp.json</code>). Agents should only cite package
-            names returned by these tools; citation guardrails remain on the
-            API. See the repo README for the full tool schema and setup.
+            MCP tools forward HTTP to the same API as this UI —
+            <code>search_packages</code>, <code>recommend_packages</code>,
+            <code>health</code>. See the repo README for setup.
           </p>
         </section>
 
         <section>
           <h2>Stack at a glance</h2>
           <ul>
-            <li>BigQuery → sentence-transformers / PyTorch → Qdrant Cloud</li>
-            <li>FastAPI + Pydantic for the search contract; Mangum on Lambda</li>
-            <li>ONNX Runtime for hosted query embeddings and rerank (no PyTorch import)</li>
-            <li>
-              <code>POST /v1/rag</code> + SSE: retrieve 50 → top 8 → citation-checked
-              Gemini top-3 (demo <em>LLM</em> checkbox)
-            </li>
-            <li>
-              Vertex Gemini (<code>gemini-2.5-flash-lite</code>, fallback
-              <code>gemini-2.5-flash</code>) on GCP; service account in AWS
-              Secrets Manager on Lambda
-            </li>
-            <li>
-              MCP stdio server (<code>make run-mcp</code> /
-              <code>python -m sarr.mcp.server</code>):
-              <code>search_packages</code>, <code>recommend_packages</code>,
-              <code>health</code> → HTTP API (local or hosted)
-            </li>
-            <li>Vite demo (Search, How it works, Contact)</li>
-            <li>Automated unit tests and lint in CI</li>
+            <li>PyPI BigQuery → PyTorch ETL → Qdrant (~700k vectors)</li>
+            <li>BigQuery metadata hydrate on each search batch</li>
+            <li>FastAPI + ONNX on Lambda; optional Vertex Gemini for RAG</li>
+            <li>Vite demo (Search · How it works · Contact)</li>
           </ul>
         </section>
 

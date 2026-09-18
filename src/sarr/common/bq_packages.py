@@ -83,8 +83,14 @@ _PYPI_ROW_SELECT = """
 
 def _pypi_text_filter_sql(min_len: int) -> str:
     return f"""(
-    (p.description IS NOT NULL AND TRIM(p.description) != '' AND LENGTH(TRIM(p.description)) > {min_len})
-    OR (p.summary IS NOT NULL AND TRIM(p.summary) != '' AND LENGTH(TRIM(p.summary)) > {min_len})
+    (
+      p.description IS NOT NULL AND TRIM(p.description) != ''
+      AND LENGTH(TRIM(p.description)) > {min_len}
+    )
+    OR (
+      p.summary IS NOT NULL AND TRIM(p.summary) != ''
+      AND LENGTH(TRIM(p.summary)) > {min_len}
+    )
   )"""
 
 
@@ -99,8 +105,10 @@ def _pypi_popularity_filter_sql(settings: Settings) -> str:
     if settings.etl_min_sourcerank > 0:
         thresholds.append(f"COALESCE(li.sourcerank, 0) >= {int(settings.etl_min_sourcerank)}")
     if settings.etl_min_dependent_projects > 0:
+        dep_min = int(settings.etl_min_dependent_projects)
         thresholds.append(
-            f"COALESCE(li.dependent_projects_count, 0) >= {int(settings.etl_min_dependent_projects)}"
+            "COALESCE(li.dependent_projects_count, 0) >= "
+            f"{dep_min}"
         )
     if settings.etl_min_long_description_length > 0:
         long_len = int(settings.etl_min_long_description_length)
@@ -201,10 +209,10 @@ def build_pypi_fetch_by_names_sql(settings: Settings) -> str:
         + "  SELECT DISTINCT LOWER(REPLACE(n, '_', '-')) AS norm\n"
         + "  FROM UNNEST(@names) AS n\n"
         + ")\n"
-        + "SELECT rows.*\n"
+        + "SELECT pkg_rows.*\n"
         + "FROM (\n"
         + _format_row_select(settings)
-        + "\n) AS rows\n"
+        + "\n) AS pkg_rows\n"
         + "INNER JOIN requested AS req\n"
-        + "  ON LOWER(REPLACE(rows.name, '_', '-')) = req.norm\n"
+        + "  ON LOWER(REPLACE(pkg_rows.name, '_', '-')) = req.norm\n"
     )

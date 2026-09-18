@@ -47,9 +47,12 @@ class QdrantLoader:
     ) -> None:
         from qdrant_client.http import models as qmodels
 
+        # Vectors-only index: store package name for identity; metadata lives in BigQuery.
         qdrant_payloads: list[dict[str, Any] | None]
         if self.settings.qdrant_vectors_only:
-            qdrant_payloads = [{"name": pid} for pid in ids]
+            qdrant_payloads = [
+                {"name": pid.strip().lower().replace("_", "-")} for pid in ids
+            ]
         else:
             qdrant_payloads = list(payloads or [{} for _ in ids])
 

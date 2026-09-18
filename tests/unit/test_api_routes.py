@@ -66,7 +66,7 @@ def test_rag_endpoint_streams_ranked_list_then_llm(monkeypatch: pytest.MonkeyPat
             return [0.1, 0.2, 0.3]
 
     class Store:
-        def search(self, vector, *, limit: int, query_filter=None):
+        def search(self, vector, *, limit: int, query_filter=None, vectors_only=None):
             return [
                 {
                     "id": "requests",
@@ -111,7 +111,12 @@ def test_rag_endpoint_streams_ranked_list_then_llm(monkeypatch: pytest.MonkeyPat
             yield json_lib.dumps(payload)
 
     search = SearchService(
-        settings=Settings(rag_context_k=8, rag_retrieve_k=50, rag_rerank_k=50),
+        settings=Settings(
+            qdrant_vectors_only=False,
+            rag_context_k=10,
+            rag_retrieve_k=50,
+            rag_rerank_k=50,
+        ),
         embedder=Embedder(),  # type: ignore[arg-type]
         vector_store=Store(),  # type: ignore[arg-type]
         reranker=Reranker(),  # type: ignore[arg-type]

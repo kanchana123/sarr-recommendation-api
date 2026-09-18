@@ -1,9 +1,10 @@
 # SARR — Semantic Artifacts Retrieval and Ranking
 
 SARR is a search system for software packages that ranks results by **meaning**,
-not just keyword overlap. The MVP indexes **~168k PyPI packages** and answers
-natural-language queries such as *“async HTTP client with retries”* or
-*“machine learning”* — including packages whose names do not contain those words.
+not just keyword overlap. The index covers **~700k PyPI packages** (filtered from
+current PyPI BigQuery metadata) and answers natural-language queries such as
+*“async HTTP client with retries”* or *“machine learning”* — including packages
+whose names do not contain those words.
 
 Offline indexing runs on GPU (Google Colab) with **PyTorch**. Online search
 embeds the query, retrieves neighbors, optionally reranks, and blends
@@ -34,19 +35,73 @@ close.
 
 ## Architecture
 
-Offline indexing (GPU, infrequent) is separate from online search (CPU, per request). Both paths share the same bi-encoder checkpoint (`BAAI/bge-small-en-v1.5`) and search-document format. ETL uses PyTorch; Lambda serves the same weights as ONNX.
+Offline indexing (GPU, infrequent) is separate from online search (CPU, per
+request). Both paths share the same bi-encoder checkpoint
+(`BAAI/bge-small-en-v1.5`) and search-document format. ETL uses PyTorch;
+Lambda serves the same weights as ONNX.
 
-<img src="docs/diagrams/architecture.png" alt="SARR architecture: GitHub Pages and CLI call API Gateway and Lambda; Colab ETL upserts into Qdrant Cloud" width="800" />
+**Storage split:** Qdrant holds **vectors + package name only** (~700k points,
+fits free-tier disk). **Rich metadata** (summary, stars, forks, URLs) lives in
+**BigQuery** and is fetched after vector retrieval, then used for rerank and
+blending.
 
-Request path inside the API (`took_ms` is server-side time):
+### System context
 
-<img src="docs/diagrams/search-sequence.png" alt="Search sequence: query embed, Qdrant ANN, optional ONNX rerank, score blend" width="800" />
+```mermaid
+flowchart TB
+  subgraph offline["Offline indexing (Colab GPU)"]
+    BQ1["BigQuery PyPI metadata\n+ Libraries.io signals"]
+    ETL["Filter · document build · embed"]
+    QD[("Qdrant Cloud\n~700k vectors")]
+    BQ1 --> ETL --> QD
+  end
+
+  subgraph online["Online search (Lambda / local API)"]
+    UI["GitHub Pages · CLI · MCP"]
+    GW["API Gateway"]
+    API["FastAPI + ONNX"]
+    BQ2["BigQuery metadata\n(batch by name)"]
+    UI --> GW --> API
+    API --> QD
+    API --> BQ2
+  end
+```
+
+### Search request path
+
+```mermaid
+sequenceDiagram
+  participant C as Client
+  participant A as API
+  participant O as ONNX bi-encoder
+  participant Q as Qdrant
+  participant B as BigQuery
+  participant R as ONNX cross-encoder
+
+  C->>A: POST /v1/search
+  A->>O: embed query (384-d)
+  O-->>A: query vector
+  A->>Q: ANN top-k (vectors only)
+  Q-->>A: ids + cosine scores
+  A->>B: fetch metadata for names
+  B-->>A: summaries, stars, recency
+  opt rerank=true
+    A->>R: rescore query vs top-k text
+    R-->>A: relevance scores
+  end
+  A->>A: blend relevance + popularity + recency
+  A-->>C: JSON hits + timing_ms
+```
+
+Legacy PNG exports (optional): `docs/diagrams/architecture.png`,
+`docs/diagrams/search-sequence.png` — regenerate from the diagrams above when
+updating marketing assets.
 
 | Path | Role |
 |---|---|
-| **ETL** | Watermarked BigQuery extract → document build → PyTorch bi-encoder batch embed → idempotent Qdrant upsert |
-| **Online search** | ONNX query embed → top‑k vector search → optional ONNX cross-encoder → α·relevance + β·popularity + δ·recency |
-| **Online RAG** | Same retrieval (50 → top 8) → SSE `ranked_list` → Vertex Gemini top-3 with citation checks |
+| **ETL** | Filtered PyPI BigQuery extract → document build → PyTorch embed → Qdrant upsert (vector + name) |
+| **Online search** | ONNX query embed → Qdrant ANN → BigQuery hydrate → optional ONNX rerank → α·relevance + β·popularity + δ·recency |
+| **Online RAG** | Same retrieval + hydrate (50 → top 10) → SSE `ranked_list` → Vertex Gemini top-3 with citation checks |
 | **MCP (agents)** | Local stdio server → HTTP to the API; RAG SSE collapsed to one JSON tool result |
 | **Shared** | Same embedding model and search-document format for index and query (no train/serve skew) |
 
@@ -61,11 +116,12 @@ Designed so indexing (heavy, infrequent, GPU) stays separate from serving
 - **Bi-encoder:** `BAAI/bge-small-en-v1.5` (384‑d). Colab ETL embeds the corpus with PyTorch; Lambda embeds queries with a baked ONNX graph.  
 - **ANN:** cosine similarity over the full collection in Qdrant  
 - **Rerank (optional):** `cross-encoder/ms-marco-MiniLM-L-6-v2` on a short top‑k list. Hosted Lambda runs this as ONNX as well (`rerank: true` in `POST /v1/search`). The demo **Rerank** checkbox controls this only.  
-- **LLM / RAG (optional):** `POST /v1/rag` when the demo **LLM** checkbox is on. Gemini writes a citation-checked top-3 from the retrieved set. Generation does not run unless that box is checked.  
+- **LLM / RAG (optional):** `POST /v1/rag` when the demo **LLM** checkbox is on. The UI lists **10** ranked packages first (`ranked_list`), then Gemini writes a citation-checked **top-3** from that set. Generation does not run unless **LLM** is checked.  
+- **Demo results list:** `POST /v1/search` defaults to `limit=10`; the Search page shows all **10** blended hits. With **LLM**, the same **10** appear above the Gemini block.  
 - **Blend:** semantic score mixed with stars / dependents / SourceRank and release recency  
 
-Numeric popularity is kept in the **payload**, not stuffed into the embedding
-text, so similarity stays about *what the package does*.
+Numeric popularity is loaded from **BigQuery after retrieval**, not stuffed into
+the embedding text, so similarity stays about *what the package does*.
 
 ---
 
@@ -78,11 +134,13 @@ search or RAG).
 Pipeline:
 
 1. Retrieve 50 neighbors (same embedder and Qdrant collection as `/v1/search`).
-2. Optionally rerank those 50 with MiniLM; keep 8 packages for the prompt.
-3. Stream `ranked_list` first so the UI is complete without Gemini.
-4. Prompt Gemini with **name + description only** (no stars or URLs).
-5. Parse JSON (`package`, `reason`, `cited_snippet`). Drop any package name
-   that is not in the retrieved eight. Stream `llm_done` or `llm_error`.
+2. Hydrate metadata from BigQuery for those names (same as search).
+3. Optionally rerank those 50 with MiniLM; keep the **top 10** after blend for
+   the ranked list and Gemini context (`RAG_CONTEXT_K=10`).
+4. Stream `ranked_list` first (10 hits) so the UI is complete without Gemini.
+5. Prompt Gemini with **name + description only** (no stars or URLs).
+6. Parse JSON (`package`, `reason`, `cited_snippet`). Drop any package name
+   that is not in the retrieved ten. Stream `llm_done` or `llm_error`.
 
 Local defaults: `VERTEX_GEMINI_MODEL=gemini-2.5-flash-lite` with fallback
 `gemini-2.5-flash`. Set `GCP_PROJECT_ID`. Locally, use `gcloud auth
@@ -97,32 +155,38 @@ curl -N http://localhost:8080/v1/rag \
   -d '{"query":"async HTTP client","rerank":true}'
 ```
 
-A local measured UI run (warm, rerank on) reported fast path **472 ms** and
-Gemini top-3 **1.05 s** (`llm_ms`). On the hosted demo (warm, rerank + LLM):
-ranked list **~350–520 ms** server `took_ms`, Gemini **~650 ms–1.2 s**
-(`llm_ms`). API Gateway may buffer SSE, so the UI can receive both events
-together.
+API Gateway may buffer SSE on `/v1/rag`, so the UI can receive ranked and LLM
+events together.
 
 ---
 
-## Performance (MVP measurements)
+## Performance
 
-Latency below is **server `took_ms`** (embed + Qdrant + optional rerank + blend). That is the number to quote for serving performance. **Client RTT** includes the network to `us-east-1` and is what a browser feels; do not mix it into p99 unless you say where the client ran. Cold start is quoted separately — do not fold it into p50/p95/p99.
+Latency below is **server `took_ms`** (embed + Qdrant + BigQuery hydrate +
+optional rerank + blend). **`timing_ms`** also includes `bq_ms` after the
+700k / vectors-only migration. **Client RTT** includes network to `us-east-1`.
+Cold start is quoted separately — do not fold it into p50/p95/p99.
 
 | Condition | Server `took_ms` | Notes |
 |---|---|---|
-| Full index load | — | **167,619** packages embedded + upserted (Colab T4, PyTorch) |
-| Corpus freshness | — | Libraries.io slice; newest `latest_release` in this dump is **Dec 2018** |
-| Cold, `rerank=false` | **~5 s** | First request after idle; loads ONNX bi-encoder |
-| Cold, `rerank=true` | **~16 s** | Also loads ONNX MiniLM cross-encoder |
-| Warm, `rerank=false` | **p50 18 ms · p95 65 ms · p99 67 ms** | 50 sequential mixed queries |
-| Warm, `rerank=true` | **p50 172 ms · p95 257 ms** | ~154 ms extra for the cross-encoder; client p50 ~271 ms |
-| Warm stages | embed **~7 ms**, Qdrant **~10 ms** (p50) | Same embed/Qdrant split with or without rerank |
-| Hosted RAG (warm, rerank + LLM) | ranked **~350–520 ms** · Gemini **~650 ms–1.2 s** | Server `took_ms` + `llm_ms`; SSE may not stream on API Gateway |
+| Indexed corpus | — | **~700,000** packages (filtered PyPI metadata; vectors in Qdrant) |
+| Corpus freshness | — | PyPI `distribution_metadata` + Libraries.io popularity join |
+| Cold, `rerank=false` | *TBD* | First request after idle; loads ONNX bi-encoder |
+| Cold, `rerank=true` | *TBD* | Also loads ONNX MiniLM cross-encoder |
+| Warm, `rerank=false` | *TBD* (p50 / p95 / p99) | Remeasure after 700k + BQ hydrate path |
+| Warm, `rerank=true` | *TBD* (p50 / p95 / p99) | Includes cross-encoder on hydrated summaries |
+| Warm stages | embed *TBD* · Qdrant *TBD* · BQ *TBD* | From `timing_ms` on `/v1/search` |
+| Hosted RAG (warm, rerank + LLM) | ranked *TBD* · Gemini *TBD* | `took_ms` + `llm_ms`; SSE may not stream on API Gateway |
 
-Warm percentiles: `scripts/measure_latency.py`, **20 Aug 2026**, 1 warmup + 50 requests against the live API (`isz2aki1n2…`), all succeeded. Client RTT from this machine: p50 **117 ms** (no rerank), **271 ms** (rerank); p95 **193 ms** / **421 ms**. A cold `rerank=true` request can hit API Gateway’s **30 s** limit (503) while ONNX sessions load — warmup once before measuring. API Gateway HTTP APIs still cap the client wait at **30 s**, which is why Lambda uses ONNX instead of importing PyTorch.
+Re-run after deploy:
 
-Each response also includes `took_ms` and `timing_ms` (`embed_ms`, `qdrant_ms`, `rerank_ms`).
+```bash
+python3 scripts/measure_latency.py --url "$SARR_API_URL" --n 50
+python3 scripts/measure_latency.py --url "$SARR_API_URL" --n 50 --rerank --skip-warmup
+```
+
+Each response includes `took_ms` and `timing_ms` (`embed_ms`, `qdrant_ms`,
+`bq_ms`, `rerank_ms`, `blend_ms`).
 
 ### How to measure latency
 
@@ -165,9 +229,9 @@ id).
 
 | Layer | Choice |
 |---|---|
-| Data | BigQuery public Libraries.io (`projects` ⨝ `repositories`), PyPI filter |
+| Data | PyPI BigQuery `distribution_metadata` + Libraries.io join; metadata hydrate at search |
 | ML | sentence-transformers / PyTorch (ETL); ONNX Runtime (Lambda embed + rerank); Vertex Gemini (optional RAG) |
-| Store | Qdrant Cloud |
+| Store | Qdrant Cloud (~700k vectors + name); BigQuery for online metadata |
 | API | FastAPI, Pydantic v2, Mangum (Lambda); SSE on `POST /v1/rag` |
 | Packaging | `src/` layout, `pyproject.toml`, optional extras (`api` / `etl` / `dev`) |
 | UI | Vite static multi-page demo |
@@ -382,7 +446,11 @@ make test
 
 OpenAPI docs: `http://localhost:8080/docs`
 
-The demo UI has two independent checkboxes. **Rerank** sends `rerank` on `/v1/search` (or on `/v1/rag` when LLM is also on). **LLM** is the only control that calls `/v1/rag` and Gemini.
+The demo UI has two independent checkboxes. **Rerank** sends `rerank` on
+`/v1/search` (or on `/v1/rag` when LLM is also on). **LLM** is the only control
+that calls `/v1/rag` and Gemini. Every search shows **10** ranked cards (classic
+search or RAG `ranked_list`); Gemini adds a separate **top-3** section when
+**LLM** is checked.
 
 **MCP** exposes the same endpoints as agent tools: `search_packages` → `/v1/search`, `recommend_packages` → `/v1/rag` (SSE consumed server-side), `health` → `/healthz`. See [MCP (agents / Cursor)](#mcp-agents--cursor) above.
 
@@ -392,7 +460,7 @@ The demo UI has two independent checkboxes. **Rerank** sends `rerank` on `/v1/se
 
 ## Roadmap
 
-- Incremental refresh from official PyPI BigQuery metadata (fresher releases) while preserving Libraries.io popularity fields
+- Publish updated latency percentiles for the 700k + BigQuery-hydrate search path
 - Hybrid sparse + dense retrieval for exact name matches
 - Larger eval set (nDCG) for ranking weight tuning
 

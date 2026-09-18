@@ -122,11 +122,50 @@ function renderRankedList(data, clientMs, requestedRerank) {
         <h2>${escapeHtml(hit.name)}</h2>
         <span class="score">${Number(hit.score).toFixed(3)}</span>
       </div>
-      <p>${escapeHtml(hit.summary || "")}</p>
+      <div class="hit-summary"></div>
       <p class="meta">★ ${hit.stars ?? 0} · forks ${hit.forks ?? 0}</p>
     `;
+    attachClampedSummary(article.querySelector(".hit-summary"), hit.summary || "");
     resultsEl.appendChild(article);
   }
+}
+
+function attachClampedSummary(container, summary) {
+  const text = String(summary || "").trim();
+  if (!text) {
+    container.remove();
+    return;
+  }
+
+  const clampWrap = document.createElement("div");
+  clampWrap.className = "hit-summary-clamp is-clamped";
+
+  const body = document.createElement("span");
+  body.className = "hit-summary-text";
+  body.textContent = text;
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "hit-summary-toggle";
+  toggle.textContent = "More";
+  toggle.hidden = true;
+
+  toggle.addEventListener("click", () => {
+    const expanded = clampWrap.classList.toggle("is-expanded");
+    clampWrap.classList.toggle("is-clamped", !expanded);
+    toggle.textContent = expanded ? "Less" : "More";
+    toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+  });
+
+  clampWrap.append(body, toggle);
+  container.append(clampWrap);
+
+  requestAnimationFrame(() => {
+    if (body.scrollHeight > body.clientHeight + 1) {
+      toggle.hidden = false;
+      toggle.setAttribute("aria-expanded", "false");
+    }
+  });
 }
 
 function geminiBadge(title, subtitle = "Generated with Gemini") {
@@ -144,8 +183,23 @@ function geminiBadge(title, subtitle = "Generated with Gemini") {
 function renderRecommendations(data) {
   const recs = data.recommendations || [];
   if (!recs.length) {
-    recsEl.innerHTML =
-      "<p class=\"meta\">No grounded recommendations passed citation checks.</p>";
+    const parts = [
+      "Gemini returned no usable top-3 for this query.",
+      "Vector search above still succeeded.",
+    ];
+    if (data.parse_error) {
+      parts.push(`Parse error: ${data.parse_error}`);
+    }
+    if (data.dropped?.length) {
+      parts.push(
+        `Dropped package name(s) not in the retrieved set: ${data.dropped.join(", ")}.`,
+      );
+    } else if (!data.parse_error) {
+      parts.push(
+        "Often Gemini picks well-known packages (e.g. whisper) that are not in the top 10 sent to the model.",
+      );
+    }
+    recsEl.innerHTML = `<p class="meta">${escapeHtml(parts.join(" "))}</p>`;
     return;
   }
   recsEl.innerHTML = geminiBadge("Grounded top-3");

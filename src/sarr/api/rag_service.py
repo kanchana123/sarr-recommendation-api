@@ -36,7 +36,7 @@ class RagService:
         self.llm = llm or VertexGeminiStreamer(self.settings)
 
     def retrieve(self, request: RagRequest) -> SearchResponse:
-        # Fetch 50, keep 8 for Gemini. Cross-encoder runs only when request.rerank is true.
+        # Fetch 50, keep 10 for ranked_list + Gemini. Rerank when request.rerank is true.
         started = time.perf_counter()
         rerank = True if request.rerank is None else request.rerank
         search_request = SearchRequest(

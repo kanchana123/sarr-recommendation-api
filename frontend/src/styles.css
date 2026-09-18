@@ -257,6 +257,71 @@ button {
   font-size: 0.9rem;
 }
 
+.hit-summary {
+  margin: 0.55rem 0 0.35rem;
+}
+
+.hit-summary-clamp {
+  line-height: 1.45;
+  font-size: inherit;
+  color: var(--ink);
+}
+
+.hit-summary-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.hit-summary-clamp.is-clamped {
+  position: relative;
+}
+
+.hit-summary-clamp.is-clamped .hit-summary-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  padding-right: 3.4rem;
+}
+
+.hit-summary-clamp.is-clamped .hit-summary-toggle {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  line-height: 1.45;
+  padding-left: 0.2rem;
+  background: linear-gradient(to right, transparent, var(--card) 28%);
+}
+
+.hit-summary-clamp.is-expanded .hit-summary-text {
+  display: inline;
+}
+
+.hit-summary-clamp.is-expanded .hit-summary-toggle {
+  display: inline;
+  margin-left: 0.35em;
+  vertical-align: baseline;
+  background: none;
+}
+
+.hit-summary-toggle {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  white-space: nowrap;
+}
+
+.hit-summary-toggle:hover {
+  opacity: 0.85;
+}
+
 .meta {
   margin: 0.35rem 0 0;
   color: var(--muted);
@@ -301,6 +366,47 @@ button {
   color: var(--muted);
   font-size: 0.9rem;
   line-height: 1.45;
+}
+
+.flow-diagram {
+  display: grid;
+  gap: 0.65rem;
+  margin: 1rem 0 1.25rem;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.flow-diagram .row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.flow-diagram .box {
+  padding: 0.45rem 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.flow-diagram .arrow {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.flow-diagram .lane-title {
+  width: 100%;
+  margin: 0.25rem 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
 }
 
 .steps {
