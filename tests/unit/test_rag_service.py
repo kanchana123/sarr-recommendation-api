@@ -18,7 +18,7 @@ class FakeEmbedder:
 
 
 class FakeStore:
-    def search(self, vector, *, limit: int, query_filter=None):
+    def search(self, vector, *, limit: int, query_filter=None, vectors_only=None):
         hits = [
             {
                 "id": "requests",
@@ -63,11 +63,12 @@ class FakeLlm:
 def _service(llm: FakeLlm) -> RagService:
     search = SearchService(
         settings=Settings(
+            qdrant_vectors_only=False,
             rerank_enabled_default=False,
             search_top_k=50,
             rag_retrieve_k=50,
             rag_rerank_k=50,
-            rag_context_k=8,
+            rag_context_k=10,
         ),
         embedder=FakeEmbedder(),  # type: ignore[arg-type]
         vector_store=FakeStore(),  # type: ignore[arg-type]
@@ -90,6 +91,50 @@ def _parse_events(chunks: list[str]) -> list[tuple[str, dict]]:
         if data is not None:
             events.append((event, data))
     return events
+
+
+@pytest.mark.unit
+def test_rag_context_k_defaults_to_ten() -> None:
+    assert Settings(gcp_project_id="test").rag_context_k == 10
+
+
+@pytest.mark.unit
+def test_retrieve_caps_ranked_results_at_rag_context_k() -> None:
+    class ManyHitStore:
+        def search(self, vector, *, limit: int, query_filter=None, vectors_only=None):
+            hits = [
+                {
+                    "id": f"pkg-{i}",
+                    "score": 1.0 - i * 0.01,
+                    "payload": {
+                        "name": f"pkg-{i}",
+                        "summary": f"Package {i}",
+                        "stars": 0,
+                    },
+                }
+                for i in range(20)
+            ]
+            return hits[:limit]
+
+    search = SearchService(
+        settings=Settings(
+            qdrant_vectors_only=False,
+            rerank_enabled_default=False,
+            rag_retrieve_k=50,
+            rag_rerank_k=50,
+            rag_context_k=10,
+        ),
+        embedder=FakeEmbedder(),  # type: ignore[arg-type]
+        vector_store=ManyHitStore(),  # type: ignore[arg-type]
+        reranker=FakeReranker(),  # type: ignore[arg-type]
+        warm=False,
+    )
+    rag = RagService(search, settings=search.settings, llm=FakeLlm({"recommendations": []}))
+    ranked = rag.retrieve(RagRequest(query="http client", rerank=False))
+    assert ranked.total == 10
+    assert len(ranked.results) == 10
+    names = [hit.name for hit in ranked.results]
+    assert names == [f"pkg-{i}" for i in range(10)]
 
 
 @pytest.mark.unit

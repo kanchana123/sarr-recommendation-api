@@ -26,6 +26,7 @@ api = [
   "fastapi>=0.111",
   "uvicorn[standard]>=0.30",
   "google-genai>=1.0",
+  "google-cloud-bigquery>=3.20",
 ]
 etl = [
   "qdrant-client>=1.9",

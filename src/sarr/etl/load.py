@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from sarr.common.config import Settings, get_settings
+from sarr.common.point_id import package_point_id
 
 
 class QdrantLoader:
@@ -42,23 +43,29 @@ class QdrantLoader:
         self,
         ids: Sequence[str],
         vectors: Sequence[Sequence[float]],
-        payloads: Sequence[dict[str, Any]],
+        payloads: Sequence[dict[str, Any]] | None = None,
     ) -> None:
         from qdrant_client.http import models as qmodels
 
+        # Vectors-only index: store package name for identity; metadata lives in BigQuery.
+        qdrant_payloads: list[dict[str, Any] | None]
+        if self.settings.qdrant_vectors_only:
+            qdrant_payloads = [
+                {"name": pid.strip().lower().replace("_", "-")} for pid in ids
+            ]
+        else:
+            qdrant_payloads = list(payloads or [{} for _ in ids])
+
         points = [
-            qmodels.PointStruct(id=self._point_id(pid), vector=list(vector), payload=payload)
-            for pid, vector, payload in zip(ids, vectors, payloads, strict=True)
+            qmodels.PointStruct(
+                id=package_point_id(pid),
+                vector=list(vector),
+                payload=payload,
+            )
+            for pid, vector, payload in zip(ids, vectors, qdrant_payloads, strict=True)
         ]
         self.client.upsert(
             collection_name=self.settings.qdrant_collection,
             points=points,
             wait=True,
         )
-
-    @staticmethod
-    def _point_id(package_name: str) -> str:
-        # Qdrant accepts UUID or unsigned int; use UUID5 derived from name for stability
-        import uuid
-
-        return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"pypi:{package_name}"))

@@ -72,7 +72,11 @@ def run_etl(
             return
         print(f"[etl] upserting batch of {len(batch_ids)} (processed so far={processed})")
         vectors = embedder.embed_documents(batch_docs, batch_size=batch_size)
-        loader.upsert_batch(batch_ids, vectors, batch_payloads)
+        loader.upsert_batch(
+            batch_ids,
+            vectors,
+            None if cfg.qdrant_vectors_only else batch_payloads,
+        )
         processed += len(batch_ids)
 
         if batch_updates:

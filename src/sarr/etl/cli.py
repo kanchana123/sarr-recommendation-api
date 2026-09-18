@@ -9,7 +9,7 @@ from sarr.etl.pipeline import run_etl
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="SARR BigQuery → Qdrant ETL")
+    parser = argparse.ArgumentParser(description="SARR PyPI BigQuery → Qdrant ETL")
     parser.add_argument(
         "--last-update-date",
         default=None,
