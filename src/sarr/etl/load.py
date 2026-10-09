@@ -7,6 +7,14 @@ from typing import Any
 
 from sarr.common.config import Settings, get_settings
 
+# Qdrant rejects filters on unindexed payload keys; keep in sync with
+# SearchService._build_filter.
+PAYLOAD_INDEXES: dict[str, str] = {
+    "stars": "integer",
+    "license": "keyword",
+    "requires_python": "keyword",
+}
+
 
 class QdrantLoader:
     def __init__(self, settings: Settings | None = None) -> None:
@@ -28,15 +36,34 @@ class QdrantLoader:
         from qdrant_client.http import models as qmodels
 
         names = {c.name for c in self.client.get_collections().collections}
-        if self.settings.qdrant_collection in names:
-            return
-        self.client.create_collection(
-            collection_name=self.settings.qdrant_collection,
-            vectors_config=qmodels.VectorParams(
-                size=self.settings.embedding_dim,
-                distance=qmodels.Distance.COSINE,
-            ),
-        )
+        if self.settings.qdrant_collection not in names:
+            self.client.create_collection(
+                collection_name=self.settings.qdrant_collection,
+                vectors_config=qmodels.VectorParams(
+                    size=self.settings.embedding_dim,
+                    distance=qmodels.Distance.COSINE,
+                ),
+            )
+        self.ensure_payload_indexes()
+
+    def ensure_payload_indexes(self) -> list[str]:
+        """Create any missing filter indexes; returns the keys that were created."""
+        from qdrant_client.http import models as qmodels
+
+        info = self.client.get_collection(self.settings.qdrant_collection)
+        existing = set((info.payload_schema or {}).keys())
+        created: list[str] = []
+        for key, schema in PAYLOAD_INDEXES.items():
+            if key in existing:
+                continue
+            self.client.create_payload_index(
+                collection_name=self.settings.qdrant_collection,
+                field_name=key,
+                field_schema=qmodels.PayloadSchemaType(schema),
+                wait=True,
+            )
+            created.append(key)
+        return created
 
     def upsert_batch(
         self,

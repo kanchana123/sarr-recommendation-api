@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 
+from sarr.etl.load import QdrantLoader
 from sarr.etl.pipeline import run_etl
 
 
@@ -21,7 +22,16 @@ def main() -> None:
         default="data/last_update_date.txt",
         help="Where to persist the advanced watermark after a successful run.",
     )
+    parser.add_argument(
+        "--indexes-only",
+        action="store_true",
+        help="Create missing Qdrant payload indexes on the existing collection and exit.",
+    )
     args = parser.parse_args()
+    if args.indexes_only:
+        created = QdrantLoader().ensure_payload_indexes()
+        print(json.dumps({"created_indexes": created}, indent=2))
+        return
     stats = run_etl(
         last_update_date=args.last_update_date,
         batch_size=args.batch_size,
