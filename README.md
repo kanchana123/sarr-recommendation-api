@@ -168,7 +168,7 @@ id).
 | Data | BigQuery public Libraries.io (`projects` ⨝ `repositories`), PyPI filter |
 | ML | sentence-transformers / PyTorch (ETL); ONNX Runtime (Lambda embed + rerank); Vertex Gemini (optional RAG) |
 | Store | Qdrant Cloud |
-| API | FastAPI, Pydantic v2, Mangum (Lambda); SSE on `POST /v1/rag` |
+| API | FastAPI, Pydantic v2, Mangum (Lambda); SSE on `POST /v1/rag`; GraphQL (Strawberry) on `/graphql` |
 | Packaging | `src/` layout, `pyproject.toml`, optional extras (`api` / `etl` / `dev`) |
 | UI | Vite static multi-page demo |
 | Agents | MCP stdio server (`sarr[mcp]`) — tools wrap `/v1/search`, `/v1/rag`, `/healthz` |
@@ -379,8 +379,17 @@ make test
 | `GET` | `/healthz` | Liveness |
 | `POST` | `/v1/search` | `{ "query", "limit", "rerank" }` → ranked hits + `took_ms` |
 | `POST` | `/v1/rag` | `{ "query", "rerank" }` → SSE `ranked_list`, then `llm_delta` / `llm_done` (Vertex Gemini, citation-checked top-3) |
+| `POST` | `/graphql` | `search(query, limit, rerank, filters)` and `health` — same search path as `/v1/search`, clients pick fields |
 
-OpenAPI docs: `http://localhost:8080/docs`
+OpenAPI docs: `http://localhost:8080/docs`. GraphiQL: open `http://localhost:8080/graphql` in a browser.
+
+```bash
+curl -s http://localhost:8080/graphql -H 'Content-Type: application/json' -d '{
+  "query": "{ search(query: \"async HTTP client\", limit: 3, rerank: true) { tookMs packages { name stars license } } }"
+}'
+```
+
+GraphQL requests are capped at depth 6 and 5 aliases, so one request can't fan out into many searches.
 
 The demo UI has two independent checkboxes. **Rerank** sends `rerank` on `/v1/search` (or on `/v1/rag` when LLM is also on). **LLM** is the only control that calls `/v1/rag` and Gemini.
 
