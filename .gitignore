@@ -57,9 +57,12 @@ docker-data/
 # Jupyter
 .ipynb_checkpoints/
 
-# Terraform / local state (if added later)
+# Terraform (commit .terraform.lock.hcl and *.tfvars.example)
 **/.terraform/
 *.tfstate*
+*.tfvars
+*.tfplan
+crash.log
 infra/.aws-sam/
 
 devio.md

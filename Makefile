@@ -1,7 +1,8 @@
-.PHONY: help install install-dev install-mcp test lint format run-api run-mcp latency docker-build docker-up docker-down docker-logs docker-build-api docker-build-lambda gcp-setup-vertex deploy-lambda deploy-lambda-guided deploy-lambda-full sam-build sam-deploy-guided sam-deploy sam-delete
+.PHONY: help install install-dev install-mcp test lint format run-api run-mcp latency docker-build docker-up docker-down docker-logs docker-build-api docker-build-lambda gcp-setup-vertex deploy-lambda deploy-lambda-guided deploy-lambda-full sam-build sam-deploy-guided sam-deploy sam-delete collector-build collector-plan collector-apply
 
 SAM_TEMPLATE := infra/template.yaml
 SAM_STACK ?= sarr-search
+COLLECTOR_TF := infra/terraform/collector
 PYTHON := $(shell test -x .venv/bin/python && echo .venv/bin/python || echo python3)
 
 help:
@@ -27,6 +28,9 @@ help:
 	@echo "  make sam-deploy-guided    First deploy (prompts for Qdrant + stack name)"
 	@echo "  make sam-deploy           Redeploy using saved samconfig.toml"
 	@echo "  make sam-delete           Tear down stack (SAM_STACK=$(SAM_STACK))"
+	@echo "  make collector-build      Build the health collector Lambda zip"
+	@echo "  make collector-plan       Build + terraform plan (infra/terraform/collector)"
+	@echo "  make collector-apply      Build + terraform apply"
 
 install:
 	pip install -e ".[api]"
@@ -100,3 +104,14 @@ sam-deploy: sam-build
 
 sam-delete:
 	sam delete --stack-name $(SAM_STACK)
+
+# Scheduled health collector (see README "Scheduled collector on AWS").
+collector-build:
+	bash scripts/build_collector_lambda.sh
+
+collector-plan: collector-build
+	terraform -chdir=$(COLLECTOR_TF) init -input=false
+	terraform -chdir=$(COLLECTOR_TF) plan
+
+collector-apply: collector-build
+	terraform -chdir=$(COLLECTOR_TF) apply

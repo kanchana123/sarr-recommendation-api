@@ -1,0 +1,8 @@
+# Copy to terraform.tfvars (gitignored). Secrets do NOT go here; see ssm.tf.
+qdrant_url        = "https://<cluster-id>.us-east-1-1.aws.cloud.qdrant.io"
+qdrant_collection = "sarr"
+
+# alarm_email     = "you@example.com"
+# with_downloads  = true
+# backfill_top_n  = 10000
+# refresh_schedule = "cron(0 7 * * ? *)"
