@@ -24,6 +24,7 @@ api = [
   "torch>=2.2",
   "mangum>=0.17",
   "fastapi>=0.111",
+  "strawberry-graphql[fastapi]>=0.332",
   "uvicorn[standard]>=0.30",
   "google-genai>=1.0",
 ]

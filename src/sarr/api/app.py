@@ -7,6 +7,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from sarr.api.graphql_schema import create_graphql_router
 from sarr.api.routes import router
 
 
@@ -39,6 +40,7 @@ def create_app() -> FastAPI:
         expose_headers=["*"],
     )
     app.include_router(router)
+    app.include_router(create_graphql_router())
     return app
 
 
