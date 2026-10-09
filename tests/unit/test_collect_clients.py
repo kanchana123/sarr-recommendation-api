@@ -140,3 +140,15 @@ def test_pypi_missing_project_and_downloads() -> None:
 def test_release_cadence_needs_two_releases() -> None:
     assert release_cadence_days([]) is None
     assert release_cadence_days([datetime(2026, 1, 1, tzinfo=UTC)]) is None
+
+
+@pytest.mark.unit
+def test_downloads_rate_limited_returns_none_instead_of_failing() -> None:
+    stats = PoliteClient(
+        user_agent="sarr-test",
+        transport=httpx.MockTransport(lambda r: httpx.Response(429, headers={"Retry-After": "0"})),
+        sleep=lambda s: None,
+        max_retries=2,
+    )
+    client = PyPIClient(_polite(lambda r: httpx.Response(404)), stats)
+    assert client.downloads_30d("busy") is None

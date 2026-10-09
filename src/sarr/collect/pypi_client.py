@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from sarr.collect.http import PoliteClient, ResponseCache
+from sarr.collect.http import PoliteClient, ResponseCache, RetriesExhaustedError
 from sarr.common.config import Settings
 
 PYPI_API = "https://pypi.org/pypi"
@@ -78,9 +78,12 @@ class PyPIClient:
             pypi=PoliteClient(
                 user_agent=settings.collector_user_agent, min_interval_s=0.1, cache=cache
             ),
-            # pypistats is a small volunteer service; keep it slow.
+            # pypistats is a small volunteer service allowing 60 requests/minute.
             stats=PoliteClient(
-                user_agent=settings.collector_user_agent, min_interval_s=1.0, cache=cache
+                user_agent=settings.collector_user_agent,
+                min_interval_s=1.1,
+                low_remaining=3,
+                cache=cache,
             ),
         )
 
@@ -93,7 +96,11 @@ class PyPIClient:
         return PypiSignals(status="ok", **result.data)
 
     def downloads_30d(self, name: str) -> int | None:
-        result = self.stats.get_json(f"{PYPISTATS_API}/{name}/recent", parse=_parse_downloads)
+        """Downloads are optional; a pypistats outage must not fail the package."""
+        try:
+            result = self.stats.get_json(f"{PYPISTATS_API}/{name}/recent", parse=_parse_downloads)
+        except RetriesExhaustedError:
+            return None
         if result.status != 200:
             return None
         downloads: int | None = result.data

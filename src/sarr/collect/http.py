@@ -137,13 +137,17 @@ class PoliteClient:
     def _throttled_wait(self, response: httpx.Response, attempt: int) -> float | None:
         status = response.status_code
         retry_after = response.headers.get("Retry-After")
-        if status == 429 or (status == 403 and retry_after):
-            if retry_after and retry_after.isdigit():
-                return float(retry_after)
-            return self._reset_wait(response) or self._backoff(attempt)
-        if status == 403 and response.headers.get("X-RateLimit-Remaining") == "0":
-            return self._reset_wait(response) or self._backoff(attempt)
-        return None
+        exhausted = response.headers.get("X-RateLimit-Remaining") == "0"
+        if not (status == 429 or (status == 403 and (retry_after or exhausted))):
+            return None
+        # Backoff is a floor: some APIs answer 429 with "Retry-After: 0".
+        waits = [self._backoff(attempt)]
+        if retry_after and retry_after.isdigit():
+            waits.append(float(retry_after))
+        reset = self._reset_wait(response)
+        if exhausted and reset:
+            waits.append(reset)
+        return max(waits)
 
     def _respect_rate_limit(self, response: httpx.Response) -> None:
         remaining = response.headers.get("X-RateLimit-Remaining")

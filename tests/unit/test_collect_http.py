@@ -193,3 +193,17 @@ def test_redirect_is_followed_and_flagged() -> None:
 
     result = _client(handler, FakeTime()).get_json("https://x.test/old")
     assert result.redirected and result.data == {"name": "new"}
+
+
+@pytest.mark.unit
+def test_retry_after_zero_still_backs_off() -> None:
+    responses = iter(
+        [
+            httpx.Response(429, headers={"Retry-After": "0"}),
+            httpx.Response(429, headers={"Retry-After": "0"}),
+            httpx.Response(200, json={}),
+        ]
+    )
+    fake = FakeTime()
+    _client(lambda r: next(responses), fake, backoff_base_s=1.0).get_json("https://x.test/r")
+    assert fake.sleeps == [1.0, 2.0]
