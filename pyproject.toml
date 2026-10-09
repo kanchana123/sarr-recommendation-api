@@ -51,6 +51,7 @@ mcp = [
 collect = [
   "qdrant-client>=1.9",
   "httpx>=0.27",
+  "boto3>=1.34",
 ]
 all = ["sarr[api,etl,dev,mcp,collect]"]
 

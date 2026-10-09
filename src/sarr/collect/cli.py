@@ -13,6 +13,7 @@ from sarr.collect.frontier import Frontier, SqliteResponseCache
 from sarr.collect.github_client import GitHubClient
 from sarr.collect.pypi_client import PyPIClient
 from sarr.collect.refresh import backfill, run_refresh
+from sarr.collect.store import QdrantPayloadStore
 from sarr.common.config import get_settings
 
 
@@ -41,7 +42,6 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _configure_logging() -> None:
-    # Importing VectorStore loads sarr.api, which may already attach a handler.
     log = logging.getLogger("sarr")
     log.setLevel(logging.INFO)
     if not log.handlers:
@@ -64,12 +64,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "status":
             result = frontier.stats(stale_days=stale_days, now=datetime.now(UTC))
         elif args.command == "backfill":
-            from sarr.api.vector_store import VectorStore
-
-            result = backfill(frontier, VectorStore(settings), top_n=args.top_n)
+            result = backfill(frontier, QdrantPayloadStore(settings), top_n=args.top_n)
         else:
-            from sarr.api.vector_store import VectorStore
-
             if not settings.github_token:
                 print(
                     "warning: GITHUB_TOKEN not set; GitHub allows 60 requests/hour",
@@ -80,7 +76,7 @@ def main(argv: list[str] | None = None) -> int:
                 frontier,
                 GitHubClient.from_settings(settings, cache),
                 PyPIClient.from_settings(settings, cache),
-                VectorStore(settings),
+                QdrantPayloadStore(settings),
                 limit=args.limit,
                 stale_days=stale_days,
                 max_failures=settings.collector_max_failures,

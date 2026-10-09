@@ -154,6 +154,43 @@ terms. Phase 2 adds `RANK_EPSILON × health_score` (other terms scaled by
 (`RANK_EPSILON=0`) until it is validated on an eval set, which this repo does
 not have yet.
 
+### Scheduled collector on AWS (Terraform)
+
+`infra/terraform/collector/` runs the collector as a scheduled Lambda
+(`sarr.collect.lambda_handler`), separate from the search API stack.
+
+| Resource | Purpose |
+|---|---|
+| Lambda (Python 3.12, 512 MB, 15 min) | Zip from `scripts/build_collector_lambda.sh`: only `sarr.common` + `sarr.collect` and four dependencies (no FastAPI or torch). The build is reproducible, so an unchanged zip doesn't redeploy |
+| EventBridge rules | Nightly `refresh` (07:00 UTC) and weekly `backfill` (Sunday 06:00 UTC) to add newly popular packages. Async invoke, no retries |
+| S3 bucket | Holds the SQLite frontier between runs (Lambda `/tmp` is wiped). Versioned, encrypted, public access blocked, TLS only. Old versions expire after 30 days |
+| S3 run lock | `collector.sqlite.lock` written with `If-None-Match: *`, so overlapping runs can't clobber the frontier. A lock older than 30 minutes is taken over |
+| SSM SecureString | `GITHUB_TOKEN` and `QDRANT_API_KEY`. Terraform creates placeholders and ignores their values, so secrets never enter Terraform state. The Lambda refuses to run on a placeholder |
+| IAM role | Its own log group, `collector/*` in its bucket, its two parameters, and `kms:Decrypt` via SSM only |
+| CloudWatch | Per-run counts as Embedded Metric Format (`SARR/Collector`: processed, written, unchanged, gone, failed, …). Alarms on Lambda errors, a missed daily run and ≥ 50 failed packages, sent to an SNS topic (optional email) |
+
+Each run takes the lock, downloads the frontier, backfills if there is none
+yet, refreshes until 90 s before the timeout, uploads the frontier and
+releases the lock (the upload happens even if the refresh fails).
+At about 1 s per package with pypistats downloads (0.6 s without), one run
+refreshes roughly 800 packages, so a 10,000-package frontier turns over in
+about two weeks.
+
+```bash
+make collector-build                       # build/collector_lambda.zip
+cd infra/terraform/collector
+cp terraform.tfvars.example terraform.tfvars   # set qdrant_url (and alarm_email)
+terraform init && terraform plan && terraform apply
+
+# then set the real secrets once (names are in the outputs)
+aws ssm put-parameter --overwrite --type SecureString \
+  --name /sarr-collector/github-token --value "$GITHUB_TOKEN"
+aws ssm put-parameter --overwrite --type SecureString \
+  --name /sarr-collector/qdrant-api-key --value "$QDRANT_API_KEY"
+
+terraform output -raw manual_run_command | sh   # optional: run now
+```
+
 ---
 
 ## Performance (MVP measurements)
@@ -241,8 +278,8 @@ sarr-recommendation-api/
 ├── notebooks/      # Colab GPU ETL
 ├── frontend/       # Search · How it works · Contact
 ├── docker/         # API + Lambda images
-├── infra/          # SAM template, deploy.env.example, deploy docs
-├── scripts/        # setup_gcp_vertex_auth.sh, deploy_lambda.sh, measure_latency.py
+├── infra/          # SAM template, deploy docs, terraform/collector (scheduled collector)
+├── scripts/        # deploy_lambda.sh, build_collector_lambda.sh, measure_latency.py, …
 └── tests/          # unit (CI) + opt-in integration
 ```
 
