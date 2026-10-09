@@ -57,6 +57,17 @@ class Settings(BaseSettings):
     rank_alpha: float = 0.75
     rank_beta: float = 0.15
     rank_delta: float = 0.10
+    # Phase 2 health term; 0 disables it. Validate on an eval set before raising.
+    rank_epsilon: float = 0.0
+
+    # Health collector (sarr-collect)
+    github_token: str | None = None
+    collector_db_path: str = "data/collector.sqlite"
+    collector_stale_days: int = 7
+    collector_max_failures: int = 3
+    collector_user_agent: str = (
+        "sarr-health-collector (+https://github.com/kanchana123/sarr-recommendation-api)"
+    )
 
 
 @lru_cache

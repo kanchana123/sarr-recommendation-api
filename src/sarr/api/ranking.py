@@ -44,6 +44,7 @@ def blend_scores(
     alpha: float = 0.75,
     beta: float = 0.15,
     delta: float = 0.10,
+    epsilon: float = 0.0,
 ) -> float:
     stars = payload.get("stars") or 0
     downloads = payload.get("downloads_30d")
@@ -64,4 +65,10 @@ def blend_scores(
     when = _parse_dt(payload.get("last_commit")) or _parse_dt(payload.get("latest_release"))
     recency = _recency_score(when)
 
-    return alpha * relevance + beta * popularity_norm + delta * recency
+    base = alpha * relevance + beta * popularity_norm + delta * recency
+    if epsilon <= 0:
+        return base
+    # Packages the collector hasn't scored yet get a neutral 0.5, not a penalty.
+    health = payload.get("health_score")
+    health = 0.5 if health is None else float(health)
+    return (1.0 - epsilon) * base + epsilon * health

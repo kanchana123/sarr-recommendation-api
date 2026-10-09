@@ -38,6 +38,15 @@ def _int_or_none(value: Any) -> int | None:
         return None
 
 
+def _float_or_none(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _str_list(value: Any) -> list[str]:
     if not value:
         return []
@@ -72,6 +81,20 @@ class Package:
     downloads_30d: int | None
     dependent_projects_count: int | None
     sourcerank: int | None
+    health_score: float | None = strawberry.field(
+        description="0..1 from push recency, release cadence, issue load, commit activity."
+    )
+    health_status: str | None = strawberry.field(description='"ok", "gone", or "error".')
+    health_checked_at: str | None = strawberry.field(
+        description="When the health collector last checked this package."
+    )
+    open_issues_count: int | None
+    release_cadence_days: float | None = strawberry.field(
+        description="Median days between the most recent releases."
+    )
+    commits_90d: int | None = strawberry.field(
+        description="Commits in the last 90 days among the 5 most recent."
+    )
 
     @classmethod
     def from_hit(cls, hit: SearchHit) -> Package:
@@ -93,6 +116,12 @@ class Package:
             downloads_30d=_int_or_none(meta.get("downloads_30d")),
             dependent_projects_count=_int_or_none(meta.get("dependent_projects_count")),
             sourcerank=_int_or_none(meta.get("sourcerank")),
+            health_score=_float_or_none(meta.get("health_score")),
+            health_status=meta.get("health_status"),
+            health_checked_at=_iso(meta.get("health_checked_at")),
+            open_issues_count=_int_or_none(meta.get("open_issues_count")),
+            release_cadence_days=_float_or_none(meta.get("release_cadence_days")),
+            commits_90d=_int_or_none(meta.get("commits_90d")),
         )
 
 
