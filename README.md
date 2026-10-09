@@ -105,6 +105,57 @@ together.
 
 ---
 
+## Package health collector
+
+The ranking signals in the ETL (`stars`, `last_commit`, `latest_release`) come
+from a static Libraries.io snapshot: `last_commit` and `downloads_30d` are empty
+for every package and star counts are years old. `sarr-collect`
+(`src/sarr/collect/`) refreshes them from the GitHub REST API, the PyPI JSON
+API and pypistats, and adds health signals. It writes with Qdrant partial
+payload updates (`set_payload`), so nothing is re-embedded.
+
+| Piece | What it does |
+|---|---|
+| `http.py` | Shared polite client: descriptive User-Agent, per-host request spacing, sleeps until `X-RateLimit-Reset` when quota runs low, honors `Retry-After` on 429/403, exponential backoff with jitter on 5xx and network errors, ETag conditional requests (`If-None-Match`; GitHub 304s don't cost quota) |
+| `github_client.py` | Repo stars, forks, open issues, push date, archived flag, last 5 commits. 404/451 → `gone`; 301 renames are followed and `repo_url` is updated |
+| `pypi_client.py` | Latest release, median release cadence (yanked files ignored), `requires_python`; 30-day downloads from pypistats |
+| `frontier.py` | SQLite frontier. Priority = `staleness_days × log1p(stars + sourcerank)`, so stale and popular packages go first. Three consecutive failures dead-letter a package |
+| `health.py` | `health_score` (0..1): push recency 35%, release recency + cadence 25%, open issues per star 15%, commits in the last 90 days 25%. Archived repos are capped at 0.2 |
+| `refresh.py` | Fetch → build fields → hash → write. An unchanged hash only updates `health_checked_at` |
+
+New payload fields: `health_score`, `health_status` (`ok` / `gone` / `error`),
+`health_checked_at`, `open_issues_count`, `release_cadence_days`,
+`commits_90d`, `archived`. They are selectable on the GraphQL `Package` type.
+
+```bash
+export GITHUB_TOKEN=…                        # 5,000 requests/hour instead of 60
+sarr-collect backfill --top-n 10000          # seed from Qdrant: GitHub-linked, most-starred first
+sarr-collect refresh --limit 1000 --max-hours 1
+sarr-collect status                          # pending, checked, failing, dead-lettered, last run
+```
+
+**Refresh policy.** A package is due when it has never been checked or its
+last check is older than `COLLECTOR_STALE_DAYS` (default 7). Runs are budgeted
+by `--limit` and `--max-hours`, and the client stops instead of sleeping past
+the deadline, so it suits a nightly job. The dedup hash compares
+`health_score` in 0.05 steps: time decay alone doesn't trigger a rewrite, and
+a stored score lags its true value by at most one step.
+
+**Measured** on a 40-package copy of the collection: the first refresh used 30
+GitHub requests (packages sharing a repo hit the ETag cache), an immediate
+rerun selected nothing, and a forced recheck wrote 0 payloads, 40 unchanged,
+using 1 GitHub request. A 215-package run found 38 renamed repos (for example
+`andymccurdy/redis-py` → `redis/redis-py`).
+
+**Ranking.** Phase 1 needs no code change: fresher `stars`, `last_commit`,
+`latest_release` and `downloads_30d` feed the existing popularity and recency
+terms. Phase 2 adds `RANK_EPSILON × health_score` (other terms scaled by
+`1 − ε`; unscored packages count as 0.5). It is **off by default**
+(`RANK_EPSILON=0`) until it is validated on an eval set, which this repo does
+not have yet.
+
+---
+
 ## Performance (MVP measurements)
 
 Latency below is **server `took_ms`** (embed + Qdrant + optional rerank + blend). That is the number to quote for serving performance. **Client RTT** includes the network to `us-east-1` and is what a browser feels; do not mix it into p99 unless you say where the client ran. Cold start is quoted separately — do not fold it into p50/p95/p99.
@@ -185,6 +236,7 @@ sarr-recommendation-api/
 │   ├── common/     # schemas, search-document builder, settings
 │   ├── api/        # FastAPI, embedder, reranker, RAG + Gemini, ranking, Qdrant client
 │   ├── mcp/        # MCP stdio tools → HTTP API (search + RAG)
+│   ├── collect/    # sarr-collect: GitHub/PyPI health refresh → Qdrant set_payload
 │   └── etl/        # BigQuery extract → transform → embed → load
 ├── notebooks/      # Colab GPU ETL
 ├── frontend/       # Search · How it works · Contact

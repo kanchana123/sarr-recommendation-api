@@ -173,3 +173,40 @@ def test_rest_search_still_works(client: TestClient) -> None:
     response = client.post("/v1/search", json={"query": "http library"})
     assert response.status_code == 200
     assert response.json()["results"][0]["name"] == "requests"
+
+
+@pytest.mark.unit
+def test_search_exposes_health_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    class HealthStub(StubSearchService):
+        def search(self, request: SearchRequest) -> SearchResponse:
+            response = super().search(request)
+            response.results[0].metadata.update(
+                health_score=0.87,
+                health_status="ok",
+                health_checked_at="2026-10-09T12:00:00+00:00",
+                open_issues_count=200,
+                release_cadence_days=31.5,
+                commits_90d=5,
+            )
+            return response
+
+    monkeypatch.setattr(routes, "_service", HealthStub())
+    query = """{ search(query: "http") { packages {
+        healthScore healthStatus healthCheckedAt openIssuesCount releaseCadenceDays commits90d
+    } } }"""
+    body = _gql(TestClient(create_app()), query)
+    assert "errors" not in body
+    assert body["data"]["search"]["packages"][0] == {
+        "healthScore": 0.87,
+        "healthStatus": "ok",
+        "healthCheckedAt": "2026-10-09T12:00:00+00:00",
+        "openIssuesCount": 200,
+        "releaseCadenceDays": 31.5,
+        "commits90d": 5,
+    }
+
+
+@pytest.mark.unit
+def test_health_fields_are_null_before_collection(client: TestClient) -> None:
+    body = _gql(client, '{ search(query: "http") { packages { healthScore healthStatus } } }')
+    assert body["data"]["search"]["packages"][0] == {"healthScore": None, "healthStatus": None}

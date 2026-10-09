@@ -37,3 +37,19 @@ def test_blend_scores_boosts_recent_commits() -> None:
         },
     )
     assert recent > stale
+
+
+@pytest.mark.unit
+def test_health_term_is_off_by_default() -> None:
+    payload = {"stars": 100}
+    assert blend_scores(0.5, payload) == blend_scores(0.5, {**payload, "health_score": 1.0})
+
+
+@pytest.mark.unit
+def test_health_term_rewards_healthy_packages_when_enabled() -> None:
+    healthy = blend_scores(0.5, {"stars": 100, "health_score": 0.9}, epsilon=0.05)
+    unhealthy = blend_scores(0.5, {"stars": 100, "health_score": 0.1}, epsilon=0.05)
+    unscored = blend_scores(0.5, {"stars": 100}, epsilon=0.05)
+    assert healthy > unscored > unhealthy
+    base = blend_scores(0.5, {"stars": 100})
+    assert unscored == pytest.approx(0.95 * base + 0.05 * 0.5)

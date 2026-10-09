@@ -102,6 +102,7 @@ class SearchService:
                 alpha=self.settings.rank_alpha,
                 beta=self.settings.rank_beta,
                 delta=self.settings.rank_delta,
+                epsilon=self.settings.rank_epsilon,
             )
             scored.append((final, hit))
 
