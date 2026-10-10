@@ -35,7 +35,7 @@ are in the sections below.
 | GraphQL search (warm, server) | **p50 15 ms · p95 16 ms** over 30 queries; client p50 149 ms |
 | Grounded RAG | Ranked list **~350–520 ms**, Gemini top-3 **~0.65–1.2 s**, every citation checked against the retrieved set |
 | Health collector, first scheduled run | **718** packages refreshed in one 15-minute Lambda run, **0** failures; **142** renamed repos corrected, **17** deleted repos and **111** archived repos flagged |
-| Data freshness (refreshed packages) | `last_commit` filled for **701 / 718** (was empty for every package); 30-day downloads for **621**; **333** show releases after 2018, the old dump's cutoff |
+| Data freshness (refreshed packages) | `last_commit` filled for **701 / 718** (the old data had none; the other 17 repos are deleted); 30-day downloads for **621**; **333** show releases after 2018, the old dump's cutoff |
 | Infrastructure as code | **24** Terraform resources, least-privilege IAM, secrets kept out of state, ~**$0/month** within free tier |
 | Quality | **127** unit tests; CI runs pytest, Ruff and `terraform fmt` / `validate` |
 
