@@ -22,9 +22,48 @@
           <h1>How SARR finds packages</h1>
           <p class="tagline">
             Embeddings, vector search, optional rerank, optional Gemini top-3,
-            and an MCP server so agents can search PyPI by meaning.
+            REST and GraphQL APIs, an MCP server for agents, and a scheduled
+            collector that keeps package health data fresh.
           </p>
         </header>
+
+        <section>
+          <h2>By the numbers</h2>
+          <ul class="metrics">
+            <li class="metric">
+              <span class="metric-value">166,819</span>
+              <span class="metric-label">PyPI packages indexed as 384-d embeddings in Qdrant</span>
+            </li>
+            <li class="metric">
+              <span class="metric-value">18 ms</span>
+              <span class="metric-label">Warm search, server p50 (p95 65 ms); 172 ms with rerank</span>
+            </li>
+            <li class="metric">
+              <span class="metric-value">15 ms</span>
+              <span class="metric-label">Warm GraphQL search, server p50 (p95 16 ms, 30 queries)</span>
+            </li>
+            <li class="metric">
+              <span class="metric-value">718</span>
+              <span class="metric-label">Packages refreshed in one 15-minute Lambda run, 0 failures</span>
+            </li>
+            <li class="metric">
+              <span class="metric-value">701 / 718</span>
+              <span class="metric-label">Now have a last-commit date (was empty for every package)</span>
+            </li>
+            <li class="metric">
+              <span class="metric-value">142</span>
+              <span class="metric-label">Renamed GitHub repos corrected; 111 archived and 17 deleted flagged</span>
+            </li>
+            <li class="metric">
+              <span class="metric-value">24</span>
+              <span class="metric-label">AWS resources in Terraform, ~$0/month within free tier</span>
+            </li>
+            <li class="metric">
+              <span class="metric-value">127</span>
+              <span class="metric-label">Unit tests; CI runs pytest, Ruff and Terraform validation</span>
+            </li>
+          </ul>
+        </section>
 
         <section>
           <h2>The problem</h2>
@@ -39,11 +78,11 @@
             <strong>SARR</strong> (Semantic Artifacts Retrieval and Ranking)
             indexes PyPI packages as semantic documents and returns a ranked
             list for natural-language queries. The live demo covers
-            <strong>167,619</strong> packages from public Libraries.io
-            metadata joined with repository signals. That dump is an MVP
-            corpus — the newest release timestamp in this slice is from
-            <strong>December 2018</strong> — so ranking features are strong,
-            while freshness is a known next step.
+            <strong>166,819</strong> packages from public Libraries.io
+            metadata joined with repository signals. That dump stops at
+            <strong>December 2018</strong>, so a scheduled health collector
+            now refreshes the most-starred packages from GitHub and PyPI
+            every night (see below).
           </p>
         </section>
 
@@ -254,8 +293,14 @@
           </p>
           <ul>
             <li>
-              Full corpus load: <strong>167,619</strong> packages (PyTorch
-              embed + Qdrant upsert on a Colab T4).
+              Full corpus load: <strong>167,619</strong> rows (PyTorch embed +
+              Qdrant upsert on a Colab T4) into <strong>166,819</strong>
+              unique packages.
+            </li>
+            <li>
+              GraphQL, warm: server p50 <strong>15 ms</strong>, p95
+              <strong>16 ms</strong> (30 sequential queries, 9 Oct 2026);
+              client p50 ~149 ms.
             </li>
             <li>
               Cold Lambda: about <strong>5 s</strong> without rerank, about
@@ -332,6 +377,109 @@
         </section>
 
         <section>
+          <h2>GraphQL API</h2>
+          <p>
+            <code>POST /graphql</code> (Strawberry on the same FastAPI app)
+            runs the exact search path as <code>/v1/search</code>, but the
+            client chooses the fields: a UI card can ask for
+            <code>name</code> and <code>stars</code> only, an agent can add
+            <code>license</code> and timings. Filters (minimum stars,
+            license, Python version) map to Qdrant payload indexes.
+            Queries are capped at depth 6 and 5 aliases so one request
+            can't fan out into many searches.
+          </p>
+          <pre><code>{ search(query: "async HTTP client", limit: 3, rerank: true) {
+    tookMs
+    packages { name stars license }
+} }</code></pre>
+        </section>
+
+        <section>
+          <h2>Package health collector</h2>
+          <p>
+            Libraries.io stopped at 2018: every package had an empty
+            last-commit date and no download counts, and star counts were
+            years old. <code>sarr-collect</code> refreshes them from the
+            GitHub REST API, the PyPI JSON API and pypistats, adds a
+            0–1 <code>health_score</code> (push and release recency,
+            release cadence, issues per star, recent commits; archived repos
+            capped), and writes with Qdrant partial payload updates, so
+            nothing is re-embedded.
+          </p>
+          <ol class="steps">
+            <li>
+              <strong>Prioritize.</strong> A SQLite frontier orders packages
+              by staleness × log(stars + SourceRank), so stale, popular
+              packages go first. Three consecutive failures dead-letter a
+              package.
+            </li>
+            <li>
+              <strong>Fetch politely.</strong> One HTTP client spaces requests
+              per host, sleeps until the rate-limit reset when quota runs low,
+              honors <code>Retry-After</code>, backs off on 5xx, and sends
+              ETags so unchanged GitHub repos return 304 without costing
+              quota. Renamed repos (301) are followed and their URL fixed.
+            </li>
+            <li>
+              <strong>Write only changes.</strong> A hash of the new fields
+              skips writes when nothing changed; the score is hashed in 0.05
+              steps so time decay alone doesn't trigger rewrites.
+            </li>
+          </ol>
+          <p>
+            The first scheduled run refreshed <strong>718</strong> of the
+            most-starred packages in 13 minutes with no failures.
+            <strong>701</strong> now have a last-commit date (441 committed
+            in 2026), <strong>621</strong> have 30-day downloads (13.7
+            billion in total), and <strong>333</strong> show releases after
+            the 2018 cutoff. It corrected <strong>142</strong> renamed repos
+            and flagged 111 archived and 17 deleted ones. Hosted search ranks
+            with the refreshed stars and dates immediately, because they are
+            the same payload fields.
+          </p>
+        </section>
+
+        <section>
+          <h2>Infrastructure as code</h2>
+          <p>
+            The collector runs as its own Lambda, defined in Terraform
+            (<code>infra/terraform/collector</code>, 24 resources), separate
+            from the SAM-deployed search API.
+          </p>
+          <ul>
+            <li>
+              <strong>Schedules:</strong> EventBridge runs a nightly refresh
+              and a weekly backfill that adds newly popular packages.
+            </li>
+            <li>
+              <strong>State:</strong> Lambda storage is wiped between runs, so
+              the frontier lives in a versioned, encrypted S3 bucket. A
+              conditional-write lock (<code>If-None-Match: *</code>) keeps
+              overlapping runs from clobbering it.
+            </li>
+            <li>
+              <strong>Secrets:</strong> the GitHub token and Qdrant key are SSM
+              SecureStrings; Terraform creates placeholders and never stores
+              the real values in its state.
+            </li>
+            <li>
+              <strong>Least privilege:</strong> the role can write only its own
+              logs and state prefix and read only its two parameters.
+            </li>
+            <li>
+              <strong>Observability:</strong> each run emits CloudWatch metrics
+              (processed, written, failed, …); alarms cover errors, a missed
+              daily run and mass package failures.
+            </li>
+            <li>
+              <strong>Packaging:</strong> a 27 MB reproducible zip with only the
+              collector and four dependencies, so an unchanged build doesn't
+              redeploy.
+            </li>
+          </ul>
+        </section>
+
+        <section>
           <h2>Stack at a glance</h2>
           <ul>
             <li>BigQuery → sentence-transformers / PyTorch → Qdrant Cloud</li>
@@ -352,8 +500,14 @@
               <code>search_packages</code>, <code>recommend_packages</code>,
               <code>health</code> → HTTP API (local or hosted)
             </li>
+            <li>GraphQL (Strawberry) on <code>/graphql</code> with depth and alias limits</li>
+            <li>
+              Health collector: httpx + SQLite frontier → Qdrant partial
+              updates, on a scheduled Lambda (EventBridge, S3, SSM,
+              CloudWatch, SNS) provisioned with Terraform
+            </li>
             <li>Vite demo (Search, How it works, Contact)</li>
-            <li>Automated unit tests and lint in CI</li>
+            <li>127 unit tests, Ruff and Terraform validation in CI</li>
           </ul>
         </section>
 

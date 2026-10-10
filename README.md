@@ -1,7 +1,7 @@
 # SARR — Semantic Artifacts Retrieval and Ranking
 
 SARR is a search system for software packages that ranks results by **meaning**,
-not just keyword overlap. The MVP indexes **~168k PyPI packages** and answers
+not just keyword overlap. It indexes **166,819 PyPI packages** and answers
 natural-language queries such as *“async HTTP client with retries”* or
 *“machine learning”* — including packages whose names do not contain those words.
 
@@ -14,10 +14,29 @@ and the cross-encoder run as **ONNX** (no PyTorch import on the request path).
 The demo UI is a static Vite app on **GitHub Pages**. An optional **MCP**
 stdio server lets coding agents call the same API as tools (`search_packages`,
 `recommend_packages`, `health`) without loading ONNX or Gemini locally.
+A **GraphQL** endpoint serves the same search with client-selected fields.
+A scheduled **package health collector** (Lambda, provisioned with
+**Terraform**) refreshes GitHub and PyPI signals into Qdrant, replacing
+metadata that was frozen at 2018.
 
 - **Live demo:** [kanchana123.github.io/sarr-recommendation-api](https://kanchana123.github.io/sarr-recommendation-api/)
-- **API:** `https://isz2aki1n2.execute-api.us-east-1.amazonaws.com` (`/v1/search`, `/v1/rag`, `/healthz`)
+- **API:** `https://isz2aki1n2.execute-api.us-east-1.amazonaws.com` (`/v1/search`, `/v1/rag`, `/graphql`, `/healthz`)
 - **Write-up:** [DEV Community](https://dev.to/kanchan_nannavare/sarr-semantic-search-for-pypi-packages-built-on-a-serverless-budget-o4n)
+
+### By the numbers
+
+Measured on the live system; dates and methods are in the sections below.
+
+| Area | Result |
+|---|---|
+| Corpus | **166,819** PyPI packages, 384-d embeddings in Qdrant Cloud |
+| REST search (warm, server) | **p50 18 ms · p95 65 ms**; with cross-encoder rerank **p50 172 ms** |
+| GraphQL search (warm, server) | **p50 15 ms · p95 16 ms** over 30 queries; client p50 149 ms |
+| Grounded RAG | Ranked list **~350–520 ms**, Gemini top-3 **~0.65–1.2 s**, every citation checked against the retrieved set |
+| Health collector, first scheduled run | **718** packages refreshed in one 15-minute Lambda run, **0** failures; **142** renamed repos corrected, **17** deleted repos and **111** archived repos flagged |
+| Data freshness (refreshed packages) | `last_commit` filled for **701 / 718** (was empty for every package); 30-day downloads for **621**; **333** show releases after 2018, the old dump's cutoff |
+| Infrastructure as code | **24** Terraform resources, least-privilege IAM, secrets kept out of state, ~**$0/month** within free tier |
+| Quality | **127** unit tests; CI runs pytest, Ruff and `terraform fmt` / `validate` |
 
 ---
 
@@ -48,6 +67,8 @@ Request path inside the API (`took_ms` is server-side time):
 | **Online search** | ONNX query embed → top‑k vector search → optional ONNX cross-encoder → α·relevance + β·popularity + δ·recency |
 | **Online RAG** | Same retrieval (50 → top 8) → SSE `ranked_list` → Vertex Gemini top-3 with citation checks |
 | **MCP (agents)** | Local stdio server → HTTP to the API; RAG SSE collapsed to one JSON tool result |
+| **GraphQL** | Strawberry on the same FastAPI app; same search path as REST, client picks fields; depth and alias limits |
+| **Health collector** | Nightly Lambda (EventBridge) → GitHub REST + PyPI + pypistats → Qdrant `set_payload` (no re-embedding); SQLite frontier in S3; Terraform-managed |
 | **Shared** | Same embedding model and search-document format for index and query (no train/serve skew) |
 
 Designed so indexing (heavy, infrequent, GPU) stays separate from serving
@@ -125,7 +146,9 @@ payload updates (`set_payload`), so nothing is re-embedded.
 
 New payload fields: `health_score`, `health_status` (`ok` / `gone` / `error`),
 `health_checked_at`, `open_issues_count`, `release_cadence_days`,
-`commits_90d`, `archived`. They are selectable on the GraphQL `Package` type.
+`commits_90d`, `archived`. They are selectable on the GraphQL `Package` type
+(locally now; on the hosted API after its next deploy). Hosted REST search
+already ranks with the refreshed `stars`, `last_commit` and `latest_release`.
 
 ```bash
 export GITHUB_TOKEN=…                        # 5,000 requests/hour instead of 60
@@ -146,6 +169,16 @@ GitHub requests (packages sharing a repo hit the ETag cache), an immediate
 rerun selected nothing, and a forced recheck wrote 0 payloads, 40 unchanged,
 using 1 GitHub request. A 215-package run found 38 renamed repos (for example
 `andymccurdy/redis-py` → `redis/redis-py`).
+
+**First scheduled production run** (Lambda, 9 Oct 2026, the 718 most-starred
+GitHub-linked packages):
+
+| Before (Libraries.io dump) | After one run |
+|---|---|
+| `last_commit` empty for all 166,819 packages | Filled for **701** of 718 (the other 17 repos are gone); **441** committed in 2026 |
+| `downloads_30d` empty for all packages | Filled for **621**, totalling **13.7 billion** downloads per 30 days |
+| Newest `latest_release` anywhere: Dec 2018 | **333** of 718 have later releases, **173** of them in 2026 |
+| No maintenance signal | **111** archived and **17** deleted repos flagged; **142** renamed repos corrected; median `health_score` 0.66 |
 
 **Ranking.** Phase 1 needs no code change: fresher `stars`, `last_commit`,
 `latest_release` and `downloads_30d` feed the existing popularity and recency
@@ -172,9 +205,9 @@ not have yet.
 Each run takes the lock, downloads the frontier, backfills if there is none
 yet, refreshes until 90 s before the timeout, uploads the frontier and
 releases the lock (the upload happens even if the refresh fails).
-At about 1 s per package with pypistats downloads (0.6 s without), one run
-refreshes roughly 800 packages, so a 10,000-package frontier turns over in
-about two weeks.
+The first run refreshed 718 packages in 13 min 14 s (about 1.1 s per package
+including pypistats, which allows 60 requests per minute), so a
+10,000-package frontier turns over in about two weeks.
 
 ```bash
 make collector-build                       # build/collector_lambda.zip
@@ -199,8 +232,10 @@ Latency below is **server `took_ms`** (embed + Qdrant + optional rerank + blend)
 
 | Condition | Server `took_ms` | Notes |
 |---|---|---|
-| Full index load | — | **167,619** packages embedded + upserted (Colab T4, PyTorch) |
-| Corpus freshness | — | Libraries.io slice; newest `latest_release` in this dump is **Dec 2018** |
+| Full index load | — | **167,619** rows embedded + upserted (Colab T4, PyTorch) into **166,819** unique packages |
+| Corpus freshness | — | Libraries.io slice ends **Dec 2018**; the health collector refreshes the most-starred packages nightly (718 after its first run) |
+| GraphQL, warm | **p50 15 ms · p95 16 ms** | 30 sequential queries, `limit: 10`, no rerank, 9 Oct 2026; client p50 149 ms |
+| Health collector run | ~**1.1 s / package** | 718 packages in 13 min 14 s (GitHub + PyPI + pypistats per package), 0 failures |
 | Cold, `rerank=false` | **~5 s** | First request after idle; loads ONNX bi-encoder |
 | Cold, `rerank=true` | **~16 s** | Also loads ONNX MiniLM cross-encoder |
 | Warm, `rerank=false` | **p50 18 ms · p95 65 ms · p99 67 ms** | 50 sequential mixed queries |
@@ -260,8 +295,9 @@ id).
 | Packaging | `src/` layout, `pyproject.toml`, optional extras (`api` / `etl` / `dev`) |
 | UI | Vite static multi-page demo |
 | Agents | MCP stdio server (`sarr[mcp]`) — tools wrap `/v1/search`, `/v1/rag`, `/healthz` |
-| Quality | pytest unit suite, Ruff, GitHub Actions CI |
-| Deploy artifacts | Docker (local API + Lambda image), SAM template |
+| Data refresh | `sarr-collect`: httpx with rate-limit, `Retry-After` and ETag handling; SQLite priority frontier; Qdrant partial payload updates |
+| Quality | pytest unit suite (127 tests), Ruff, GitHub Actions CI incl. `terraform fmt` / `validate` |
+| Deploy artifacts | Docker (local API + Lambda image), SAM template (search API), Terraform (collector: Lambda, EventBridge, S3, SSM, IAM, CloudWatch, SNS) |
 
 ---
 
@@ -490,9 +526,10 @@ The demo UI has two independent checkboxes. **Rerank** sends `rerank` on `/v1/se
 
 ## Roadmap
 
-- Incremental refresh from official PyPI BigQuery metadata (fresher releases) while preserving Libraries.io popularity fields
+- Redeploy the search API so hosted GraphQL exposes the health fields (in the code, not yet on the hosted endpoint)
+- Eval set (nDCG) to validate `RANK_EPSILON × health_score` before turning it on, and to tune ranking weights
+- Don't credit packages that link someone else's repository (e.g. `flask-next` → `pallets/flask`) with that repository's stars
 - Hybrid sparse + dense retrieval for exact name matches
-- Larger eval set (nDCG) for ranking weight tuning
 
 ---
 

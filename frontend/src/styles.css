@@ -320,6 +320,38 @@ button {
   }
 }
 
+.metrics {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.metric {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0.85rem 1rem;
+}
+
+.metric-value {
+  display: block;
+  color: var(--accent);
+  font-size: 1.45rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.prose .metric-label {
+  display: block;
+  margin-top: 0.2rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.4;
+}
+
 .compare > div {
   background: var(--card);
   border: 1px solid var(--line);
@@ -392,6 +424,20 @@ button {
 .contact-form button:disabled {
   opacity: 0.65;
   cursor: wait;
+}
+
+.prose pre {
+  margin: 0.75rem 0 0;
+  padding: 0.85rem 1rem;
+  overflow-x: auto;
+  background: #ebe7e0;
+  border-radius: 10px;
+  line-height: 1.45;
+}
+
+.prose pre code {
+  padding: 0;
+  background: none;
 }
 
 code {
