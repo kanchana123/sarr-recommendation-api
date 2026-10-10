@@ -148,7 +148,10 @@ New payload fields: `health_score`, `health_status` (`ok` / `gone` / `error`),
 `health_checked_at`, `open_issues_count`, `release_cadence_days`,
 `commits_90d`, `archived`. They are selectable on the GraphQL `Package` type
 (locally now; on the hosted API after its next deploy). Hosted REST search
-already ranks with the refreshed `stars`, `last_commit` and `latest_release`.
+already ranks with the refreshed `stars`, `last_commit` and `latest_release`
+and returns every health field in each hit's `metadata`, which the demo UI
+shows as badges (health score, last commit, commits in 90 days, archived,
+repo gone).
 
 ```bash
 export GITHUB_TOKEN=…                        # 5,000 requests/hour instead of 60

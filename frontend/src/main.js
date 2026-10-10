@@ -123,10 +123,90 @@ function renderRankedList(data, clientMs, requestedRerank) {
         <span class="score">${Number(hit.score).toFixed(3)}</span>
       </div>
       <p>${escapeHtml(hit.summary || "")}</p>
-      <p class="meta">★ ${hit.stars ?? 0} · forks ${hit.forks ?? 0}</p>
+      <p class="meta">${metaLine(hit)}</p>
+      ${healthBadges(hit)}
     `;
     resultsEl.appendChild(article);
   }
+}
+
+function metaLine(hit) {
+  const meta = hit.metadata || {};
+  const parts = [`★ ${formatCount(hit.stars ?? 0)}`, `forks ${formatCount(hit.forks ?? 0)}`];
+  if (typeof meta.downloads_30d === "number") {
+    parts.push(`${formatCount(meta.downloads_30d)} downloads / 30 days`);
+  }
+  if (meta.latest_release) {
+    parts.push(`released ${formatDate(meta.latest_release)}`);
+  }
+  return parts.map(escapeHtml).join(" · ");
+}
+
+// Only packages the health collector has checked carry these fields.
+function healthBadges(hit) {
+  const meta = hit.metadata || {};
+  if (!meta.health_checked_at) {
+    return "";
+  }
+  const badges = [];
+  if (meta.health_status === "gone") {
+    badges.push(badge("Repo gone", "bad", "The linked GitHub repository no longer exists."));
+  } else if (typeof meta.health_score === "number") {
+    const level = meta.health_score >= 0.7 ? "good" : meta.health_score >= 0.4 ? "fair" : "bad";
+    badges.push(
+      badge(
+        `Health ${meta.health_score.toFixed(2)}`,
+        level,
+        "0–1 from push and release recency, release cadence, open issues per star and recent commits.",
+      ),
+    );
+  }
+  if (meta.archived) {
+    badges.push(badge("Archived", "bad", "The GitHub repository is archived (read-only)."));
+  }
+  if (hit.last_commit) {
+    badges.push(badge(`Last commit ${timeAgo(hit.last_commit)}`, "neutral"));
+  }
+  if (typeof meta.commits_90d === "number" && meta.commits_90d > 0) {
+    const plus = meta.commits_90d >= 5 ? "5+" : String(meta.commits_90d);
+    badges.push(badge(`${plus} commits in 90 days`, "neutral"));
+  }
+  badges.push(badge(`Checked ${timeAgo(meta.health_checked_at)}`, "muted"));
+  return `<div class="badges">${badges.join("")}</div>`;
+}
+
+function badge(label, level, title = "") {
+  const titleAttr = title ? ` title="${escapeHtml(title)}"` : "";
+  return `<span class="badge badge-${level}"${titleAttr}>${escapeHtml(label)}</span>`;
+}
+
+function formatCount(value) {
+  const n = Number(value) || 0;
+  if (n >= 1e9) return `${(n / 1e9).toFixed(1).replace(/\.0$/, "")}B`;
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1).replace(/\.0$/, "")}M`;
+  if (n >= 1e4) return `${Math.round(n / 1e3)}k`;
+  return n.toLocaleString("en-US");
+}
+
+function formatDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+  return date.toLocaleDateString("en-US", { year: "numeric", month: "short" });
+}
+
+function timeAgo(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+  const days = Math.floor((Date.now() - date.getTime()) / 86_400_000);
+  if (days < 1) return "today";
+  if (days === 1) return "yesterday";
+  if (days < 60) return `${days} days ago`;
+  if (days < 730) return `${Math.round(days / 30)} months ago`;
+  return `${Math.floor(days / 365)} years ago`;
 }
 
 function geminiBadge(title, subtitle = "Generated with Gemini") {

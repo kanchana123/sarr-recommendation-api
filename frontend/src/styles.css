@@ -263,6 +263,47 @@ button {
   font-size: 0.9rem;
 }
 
+.badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.55rem;
+}
+
+.badge {
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: #f5f5f4;
+  color: var(--ink);
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.badge-good {
+  background: #dcfce7;
+  border-color: #86efac;
+  color: #166534;
+}
+
+.badge-fair {
+  background: #fef3c7;
+  border-color: #fcd34d;
+  color: #92400e;
+}
+
+.badge-bad {
+  background: #fee2e2;
+  border-color: #fca5a5;
+  color: #991b1b;
+}
+
+.badge-muted {
+  color: var(--muted);
+  font-weight: 500;
+}
+
 .prose section {
   margin-top: 2rem;
 }
