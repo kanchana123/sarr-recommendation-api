@@ -16,8 +16,8 @@ stdio server lets coding agents call the same API as tools (`search_packages`,
 `recommend_packages`, `health`) without loading ONNX or Gemini locally.
 A **GraphQL** endpoint serves the same search with client-selected fields.
 A scheduled **package health collector** (Lambda, provisioned with
-**Terraform**) refreshes GitHub and PyPI signals into Qdrant, replacing
-metadata that was frozen at 2018.
+**Terraform**) refreshes GitHub and PyPI signals into Qdrant for the
+most-starred packages, whose metadata was frozen at 2018.
 
 - **Live demo:** [kanchana123.github.io/sarr-recommendation-api](https://kanchana123.github.io/sarr-recommendation-api/)
 - **API:** `https://isz2aki1n2.execute-api.us-east-1.amazonaws.com` (`/v1/search`, `/v1/rag`, `/graphql`, `/healthz`)
@@ -25,7 +25,8 @@ metadata that was frozen at 2018.
 
 ### By the numbers
 
-Measured on the live system; dates and methods are in the sections below.
+Latency and data figures are measured on the live system; dates and methods
+are in the sections below.
 
 | Area | Result |
 |---|---|
@@ -83,7 +84,7 @@ Designed so indexing (heavy, infrequent, GPU) stays separate from serving
 - **ANN:** cosine similarity over the full collection in Qdrant  
 - **Rerank (optional):** `cross-encoder/ms-marco-MiniLM-L-6-v2` on a short top‑k list. Hosted Lambda runs this as ONNX as well (`rerank: true` in `POST /v1/search`). The demo **Rerank** checkbox controls this only.  
 - **LLM / RAG (optional):** `POST /v1/rag` when the demo **LLM** checkbox is on. Gemini writes a citation-checked top-3 from the retrieved set. Generation does not run unless that box is checked.  
-- **Blend:** semantic score mixed with stars / dependents / SourceRank and release recency  
+- **Blend:** semantic score mixed with popularity (stars, 30-day downloads or dependents, SourceRank) and recency (last commit, else latest release)  
 
 Numeric popularity is kept in the **payload**, not stuffed into the embedding
 text, so similarity stays about *what the package does*.
@@ -109,8 +110,9 @@ Local defaults: `VERTEX_GEMINI_MODEL=gemini-2.5-flash-lite` with fallback
 `gemini-2.5-flash`. Set `GCP_PROJECT_ID`. Locally, use `gcloud auth
 application-default login`. On Lambda, put a Vertex service account JSON in
 Secrets Manager (`sarr-search/gcp-vertex`); laptop ADC is not available there.
-Vertex billing must be enabled. API Gateway HTTP APIs do not stream SSE well;
-run RAG locally (`make run-api`) or on Cloud Run.
+Vertex billing must be enabled. RAG works on the hosted Lambda, but API
+Gateway HTTP APIs buffer SSE, so the ranked list and the top-3 arrive
+together there; run locally (`make run-api`) to see incremental streaming.
 
 ```bash
 curl -N http://localhost:8080/v1/rag \
@@ -129,8 +131,8 @@ together.
 ## Package health collector
 
 The ranking signals in the ETL (`stars`, `last_commit`, `latest_release`) come
-from a static Libraries.io snapshot: `last_commit` and `downloads_30d` are empty
-for every package and star counts are years old. `sarr-collect`
+from a static Libraries.io snapshot: `last_commit` and `downloads_30d` were
+empty for every package and star counts were years old. `sarr-collect`
 (`src/sarr/collect/`) refreshes them from the GitHub REST API, the PyPI JSON
 API and pypistats, and adds health signals. It writes with Qdrant partial
 payload updates (`set_payload`), so nothing is re-embedded.
@@ -229,24 +231,23 @@ terraform output -raw manual_run_command | sh   # optional: run now
 
 ---
 
-## Performance (MVP measurements)
+## Performance
 
-Latency below is **server `took_ms`** (embed + Qdrant + optional rerank + blend). That is the number to quote for serving performance. **Client RTT** includes the network to `us-east-1` and is what a browser feels; do not mix it into p99 unless you say where the client ran. Cold start is quoted separately — do not fold it into p50/p95/p99.
+Latency below is **server `took_ms`** (embed + Qdrant + optional rerank + blend), which measures the search itself. **Client RTT** adds the network round trip to `us-east-1` and is what a browser feels. Cold starts are listed separately, not mixed into the percentiles.
 
 | Condition | Server `took_ms` | Notes |
 |---|---|---|
-| Full index load | — | **167,619** rows embedded + upserted (Colab T4, PyTorch) into **166,819** unique packages |
-| Corpus freshness | — | Libraries.io slice ends **Dec 2018**; the health collector refreshes the most-starred packages nightly (718 after its first run) |
-| GraphQL, warm | **p50 15 ms · p95 16 ms** | 30 sequential queries, `limit: 10`, no rerank, 9 Oct 2026; client p50 149 ms |
-| Health collector run | ~**1.1 s / package** | 718 packages in 13 min 14 s (GitHub + PyPI + pypistats per package), 0 failures |
 | Cold, `rerank=false` | **~5 s** | First request after idle; loads ONNX bi-encoder |
 | Cold, `rerank=true` | **~16 s** | Also loads ONNX MiniLM cross-encoder |
 | Warm, `rerank=false` | **p50 18 ms · p95 65 ms · p99 67 ms** | 50 sequential mixed queries |
 | Warm, `rerank=true` | **p50 172 ms · p95 257 ms** | ~154 ms extra for the cross-encoder; client p50 ~271 ms |
 | Warm stages | embed **~7 ms**, Qdrant **~10 ms** (p50) | Same embed/Qdrant split with or without rerank |
+| GraphQL, warm | **p50 15 ms · p95 16 ms** | 30 sequential queries, `limit: 10`, no rerank, 9 Oct 2026; client p50 149 ms |
 | Hosted RAG (warm, rerank + LLM) | ranked **~350–520 ms** · Gemini **~650 ms–1.2 s** | Server `took_ms` + `llm_ms`; SSE may not stream on API Gateway |
 
-Warm percentiles: `scripts/measure_latency.py`, **20 Aug 2026**, 1 warmup + 50 requests against the live API (`isz2aki1n2…`), all succeeded. Client RTT from this machine: p50 **117 ms** (no rerank), **271 ms** (rerank); p95 **193 ms** / **421 ms**. A cold `rerank=true` request can hit API Gateway’s **30 s** limit (503) while ONNX sessions load — warmup once before measuring. API Gateway HTTP APIs still cap the client wait at **30 s**, which is why Lambda uses ONNX instead of importing PyTorch.
+The index load embedded and upserted **167,619** rows on a Colab T4 (PyTorch), which collapsed into **166,819** unique packages. Collector throughput is in [Scheduled collector on AWS](#scheduled-collector-on-aws-terraform).
+
+Warm REST percentiles: `scripts/measure_latency.py`, **20 Aug 2026**, 1 warmup + 50 requests against the live API (`isz2aki1n2…`), all succeeded. Client RTT from the laptop that ran the script: p50 **117 ms** (no rerank), **271 ms** (rerank); p95 **193 ms** / **421 ms**. A cold `rerank=true` request can hit API Gateway’s **30 s** limit (503) while ONNX sessions load — warmup once before measuring. API Gateway HTTP APIs still cap the client wait at **30 s**, which is why Lambda uses ONNX instead of importing PyTorch.
 
 Each response also includes `took_ms` and `timing_ms` (`embed_ms`, `qdrant_ms`, `rerank_ms`).
 
@@ -280,10 +281,6 @@ curl -sS -w "\nHTTP:%{http_code} TIME:%{time_total}\n" \
 ```
 
 Look at `took_ms` and `timing_ms` in the JSON for server-side time; curl’s `TIME` is the full round trip.
-
-ETL is **checkpointed by watermark** after each successful batch: a Colab
-disconnect resumes without duplicating points (Qdrant upserts by stable package
-id).
 
 ---
 
@@ -477,7 +474,7 @@ make deploy-lambda                               # later redeploys
 Scripts live in `scripts/setup_gcp_vertex_auth.sh` and `scripts/deploy_lambda.sh`.
 SAM template: `infra/template.yaml`. Example config: `samconfig.toml.example`.
 
-Stack output **ApiUrl** is the public endpoint (`/v1/search`, `/v1/rag`, `/healthz`).
+Stack output **ApiUrl** is the public endpoint (`/v1/search`, `/v1/rag`, `/graphql`, `/healthz`).
 Set `GcpProjectId=sarr-505305` (default) plus the GCP secret from `make gcp-setup-vertex`
 so the hosted UI **LLM** checkbox can call Vertex Gemini.
 
@@ -489,7 +486,9 @@ with **Source: GitHub Actions**, then run **Deploy frontend** (`.github/workflow
 Open `notebooks/etl_colab.ipynb`, use a GPU runtime, set billing `GCP_PROJECT_ID`
 and Qdrant credentials, run the diagnostic count, then the full pipeline.
 `LAST_UPDATE_DATE=1970-01-01` for the initial load; afterward the watermark file
-drives incremental runs.
+drives incremental runs. The watermark is saved after each successful batch, so
+a Colab disconnect resumes without duplicating points (Qdrant upserts by stable
+package id).
 
 ### Tests
 
@@ -523,7 +522,7 @@ The demo UI has two independent checkboxes. **Rerank** sends `rerank` on `/v1/se
 
 **MCP** exposes the same endpoints as agent tools: `search_packages` → `/v1/search`, `recommend_packages` → `/v1/rag` (SSE consumed server-side), `health` → `/healthz`. See [MCP (agents / Cursor)](#mcp-agents--cursor) above.
 
-`POST /v1/rag` streams Server-Sent Events. The ranked list is emitted first; generation uses Vertex Gemini (`GCP_PROJECT_ID` plus ADC locally, or a Secrets Manager service account on Lambda). API Gateway HTTP APIs do not stream well — the MCP tool still works by waiting for the full SSE response. The eval harness (precision@k, citation accuracy, faithfulness, cost) is a follow-on deliverable.
+`POST /v1/rag` streams Server-Sent Events. The ranked list is emitted first; generation uses Vertex Gemini (`GCP_PROJECT_ID` plus ADC locally, or a Secrets Manager service account on Lambda). API Gateway HTTP APIs buffer the stream, so on the hosted API both events arrive together; the MCP tool waits for the full SSE response either way. An eval harness for RAG (precision@k, citation accuracy, faithfulness, cost) is not built yet.
 
 ---
 
