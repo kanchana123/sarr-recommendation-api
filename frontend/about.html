@@ -55,12 +55,12 @@
               <span class="metric-label">Renamed GitHub repos corrected; 111 archived and 17 deleted flagged</span>
             </li>
             <li class="metric">
-              <span class="metric-value">24</span>
-              <span class="metric-label">AWS resources in Terraform, ~$0/month within free tier</span>
+              <span class="metric-value">333 / 718</span>
+              <span class="metric-label">Refreshed packages with releases after 2018, where the old data stopped</span>
             </li>
             <li class="metric">
-              <span class="metric-value">127</span>
-              <span class="metric-label">Unit tests; CI runs pytest, Ruff and Terraform validation</span>
+              <span class="metric-value">621 / 718</span>
+              <span class="metric-label">Refreshed packages with 30-day download counts (13.7B in total)</span>
             </li>
           </ul>
         </section>
@@ -97,11 +97,6 @@
             bi-encoder and the cross-encoder run as <strong>ONNX</strong> — no
             PyTorch import on the request path. Both paths share the same
             <code>BAAI/bge-small-en-v1.5</code> checkpoint and document format.
-          </p>
-          <p class="tagline">
-            Diagrams live in <code>frontend/public/diagrams/</code>. Replace
-            <code>architecture.png</code> and <code>search-sequence.png</code>
-            to update this page and the README.
           </p>
           <figure>
             <img
@@ -178,7 +173,7 @@
         </section>
 
         <section>
-          <h2>Grounded RAG (what shipped)</h2>
+          <h2>Grounded RAG</h2>
           <p>
             Search and generation are separate. Classic search still uses
             <code>POST /v1/search</code>. Checking <em>LLM</em> on the demo
@@ -203,8 +198,8 @@
               Vertex Gemini (<code>gemini-2.5-flash-lite</code>, fallback
               <code>gemini-2.5-flash</code>) sees only package name and
               description. It returns JSON with exactly three
-              <code>package</code>, <code>reason</code>, and
-              <code>cited_snippet</code> fields.
+              recommendations, each with <code>package</code>,
+              <code>reason</code> and <code>cited_snippet</code>.
             </li>
             <li>
               The backend drops any <code>package</code> not in the eight
@@ -214,11 +209,10 @@
             </li>
           </ol>
           <p>
-            Generation needs <code>GCP_PROJECT_ID</code> and Vertex billing.
-            API Gateway HTTP APIs do not stream SSE well, so this path is
-            meant for local FastAPI or Cloud Run. A labeled eval set
-            (precision@k, citation accuracy, faithfulness) is still future
-            work — not part of the serving stack above.
+            On the hosted demo, API Gateway may deliver the stream in one
+            block, so the ranked list and the top-3 can appear together. A
+            labeled eval set (precision@k, citation accuracy, faithfulness)
+            is still future work.
           </p>
         </section>
 
@@ -289,9 +283,9 @@
         <section>
           <h2>What “fast enough” looks like today</h2>
           <p>
-            Quote server <code>took_ms</code> for serving quality. Quote client
-            RTT plus location for what a browser feels. Cold start is separate
-            — do not fold it into p50 / p95 / p99.
+            Server times (<code>took_ms</code>) measure the search itself.
+            Client times add the network round trip to us-east-1. Cold starts
+            are listed separately rather than mixed into the percentiles.
           </p>
           <ul>
             <li>
@@ -328,17 +322,13 @@
             </li>
           </ul>
           <p>
-            To reproduce search latency:
-            <code>python3 scripts/measure_latency.py --url $SARR_API_URL --n 50</code>
-            (20 Aug 2026: 1 warmup + 50 sequential mixed queries on the live
-            API). For rerank, warm up once then add
-            <code>--rerank --skip-warmup</code>. Compare <code>took_ms</code>
-            (server) with curl’s total time (client).
+            Search percentiles come from 50 sequential mixed queries against
+            the live API after one warmup request (20 Aug 2026).
           </p>
         </section>
 
         <section>
-          <h2>MCP for agents (what shipped)</h2>
+          <h2>MCP for agents</h2>
           <p>
             <strong>Model Context Protocol</strong> lets coding agents (Cursor,
             Claude Desktop, etc.) call SARR as tools instead of guessing PyPI
@@ -347,12 +337,6 @@
             forwards HTTP to the same FastAPI app the UI uses.
           </p>
           <ol class="steps">
-            <li>
-              <strong>Install and start.</strong>
-              <code>make install-mcp</code>, then <code>make run-mcp</code>
-              (stdio). Set <code>SARR_API_URL</code> to
-              <code>http://localhost:8080</code> or the hosted API URL.
-            </li>
             <li>
               <strong><code>search_packages</code></strong> →
               <code>POST /v1/search</code>. Cheap semantic lookup with
@@ -371,10 +355,9 @@
             </li>
           </ol>
           <p>
-            Wire Cursor with <code>.cursor/mcp.json.example</code> (copy to
-            <code>.cursor/mcp.json</code>). Agents should only cite package
-            names returned by these tools; citation guardrails remain on the
-            API. See the repo README for the full tool schema and setup.
+            Agents should only cite package names returned by these tools;
+            citation guardrails stay on the API. Setup and the full tool
+            schema are in the repo README.
           </p>
         </section>
 
@@ -474,11 +457,6 @@
               (processed, written, failed, …); alarms cover errors, a missed
               daily run and mass package failures.
             </li>
-            <li>
-              <strong>Packaging:</strong> a 27 MB reproducible zip with only the
-              collector and four dependencies, so an unchanged build doesn't
-              redeploy.
-            </li>
           </ul>
         </section>
 
@@ -498,8 +476,7 @@
               Secrets Manager on Lambda
             </li>
             <li>
-              MCP stdio server (<code>make run-mcp</code> /
-              <code>python -m sarr.mcp.server</code>):
+              MCP stdio server:
               <code>search_packages</code>, <code>recommend_packages</code>,
               <code>health</code> → HTTP API (local or hosted)
             </li>
